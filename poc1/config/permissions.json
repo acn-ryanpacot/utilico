@@ -1,0 +1,21 @@
+{
+  "_legend": "V = view, A = act, OWN = only cases holding a task for this role (summary + task panel), X = view + export + verify, - = hidden",
+  "roles": ["BILLING_OPS", "DRI", "FIELD_OPS", "MASTER_DATA", "INTEGRATION", "FINANCE", "REGULATORY", "AUDITOR"],
+  "screens": {
+    "dashboard":   {"label": "Dashboard",            "BILLING_OPS": "V", "DRI": "V", "FIELD_OPS": "V",   "MASTER_DATA": "V",   "INTEGRATION": "V",   "FINANCE": "V", "REGULATORY": "V", "AUDITOR": "V"},
+    "mywork":      {"label": "My Work",              "BILLING_OPS": "A", "DRI": "A", "FIELD_OPS": "A",   "MASTER_DATA": "A",   "INTEGRATION": "A",   "FINANCE": "A", "REGULATORY": "A", "AUDITOR": "V"},
+    "billrun":     {"label": "Bill Run",             "BILLING_OPS": "A", "DRI": "V", "FIELD_OPS": "-",   "MASTER_DATA": "-",   "INTEGRATION": "-",   "FINANCE": "V", "REGULATORY": "-", "AUDITOR": "V"},
+    "cases":       {"label": "Cases",                "BILLING_OPS": "V", "DRI": "A", "FIELD_OPS": "-",   "MASTER_DATA": "-",   "INTEGRATION": "-",   "FINANCE": "V", "REGULATORY": "V", "AUDITOR": "V"},
+    "case_detail": {"label": "Case detail",          "BILLING_OPS": "V", "DRI": "A", "FIELD_OPS": "OWN", "MASTER_DATA": "OWN", "INTEGRATION": "OWN", "FINANCE": "A", "REGULATORY": "A", "AUDITOR": "V"},
+    "backscan":    {"label": "Back-scan / Daily",    "BILLING_OPS": "A", "DRI": "V", "FIELD_OPS": "-",   "MASTER_DATA": "-",   "INTEGRATION": "-",   "FINANCE": "V", "REGULATORY": "V", "AUDITOR": "V"},
+    "field":       {"label": "Field tasks",          "BILLING_OPS": "-", "DRI": "V", "FIELD_OPS": "A",   "MASTER_DATA": "-",   "INTEGRATION": "-",   "FINANCE": "-", "REGULATORY": "-", "AUDITOR": "V"},
+    "masterdata":  {"label": "Master data tasks",    "BILLING_OPS": "-", "DRI": "V", "FIELD_OPS": "-",   "MASTER_DATA": "A",   "INTEGRATION": "-",   "FINANCE": "-", "REGULATORY": "-", "AUDITOR": "V"},
+    "integration": {"label": "Integration issues",   "BILLING_OPS": "V", "DRI": "V", "FIELD_OPS": "-",   "MASTER_DATA": "-",   "INTEGRATION": "A",   "FINANCE": "-", "REGULATORY": "-", "AUDITOR": "V"},
+    "finance":     {"label": "Finance approvals",    "BILLING_OPS": "-", "DRI": "V", "FIELD_OPS": "-",   "MASTER_DATA": "-",   "INTEGRATION": "-",   "FINANCE": "A", "REGULATORY": "-", "AUDITOR": "V"},
+    "regulatory":  {"label": "Regulatory review",    "BILLING_OPS": "-", "DRI": "V", "FIELD_OPS": "-",   "MASTER_DATA": "-",   "INTEGRATION": "-",   "FINANCE": "-", "REGULATORY": "A", "AUDITOR": "V"},
+    "explorer":    {"label": "Data Explorer",        "BILLING_OPS": "V", "DRI": "V", "FIELD_OPS": "-",   "MASTER_DATA": "V",   "INTEGRATION": "V",   "FINANCE": "-", "REGULATORY": "-", "AUDITOR": "V"},
+    "audit":       {"label": "Audit log",            "BILLING_OPS": "V", "DRI": "V", "FIELD_OPS": "V",   "MASTER_DATA": "V",   "INTEGRATION": "V",   "FINANCE": "V", "REGULATORY": "V", "AUDITOR": "X"},
+    "selftest":    {"label": "Self-test & demo",     "BILLING_OPS": "V", "DRI": "V", "FIELD_OPS": "V",   "MASTER_DATA": "V",   "INTEGRATION": "V",   "FINANCE": "V", "REGULATORY": "V", "AUDITOR": "V"}
+  },
+  "demo_tools_blocked_roles": ["AUDITOR"]
+}

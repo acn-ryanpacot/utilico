@@ -1,0 +1,22 @@
+# Runtime state written by poc1/server.py (case state, sandbox overlays, audit log)
+poc1/state/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local tooling / editor settings
+.claude/
+.vscode/
+.idea/
+
+# Local copies of the supplied mock data (data/ is the canonical copy)
+utilico_mock_data/
+utilico_mock_data.zip
+
+# Superseded first version of POC 1 (single generated-data HTML file)
+poc1-disconnect-billing-detector.html
+
+# OS noise
+Thumbs.db
+.DS_Store

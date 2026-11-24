@@ -1,0 +1,4 @@
+tariff_code,description,rate_per_kwh,fixed_daily_charge,fixed_stops_on_stop_service,fixed_continues_on_nonpay
+COM-GS2,Commercial general service - large,0.16,4.50,Y,Y
+COM-GS1,Commercial general service - small,0.17,2.10,Y,Y
+RES-1,Residential standard,0.21,0.85,Y,Y

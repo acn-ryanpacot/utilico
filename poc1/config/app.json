@@ -1,0 +1,7 @@
+{
+  "_comment": "Scenario and workflow settings. extract_date is the 'as of' date of the BACKSCAN scenario.",
+  "extract_date": "2026-11-10",
+  "finance_threshold": 1000.00,
+  "max_agent_tool_calls": 12,
+  "regulatory_crm_categories": ["BILLING_DISPUTE", "REGULATORY_COMPLAINT"]
+}

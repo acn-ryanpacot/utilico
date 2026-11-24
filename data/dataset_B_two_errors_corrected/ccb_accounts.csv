@@ -1,0 +1,48 @@
+account_id,customer_name,customer_class,mailing_address,account_status,created_date
+8800010001,Alex Bennett,RES,"147 Mill Lane, Utilico City",ACTIVE,2015-05-13
+8800010002,Morgan Iverson,RES,"98 Station St, Utilico City",ACTIVE,2022-12-27
+8800010003,Jamie Pemberton,RES,"33 Wharf St, Utilico City",ACTIVE,2019-08-03
+8800010004,Taylor Whitlock,RES,"13 Elm Grove, Utilico City",ACTIVE,2016-04-28
+8800010005,Jordan Ellison,RES,"199 Wharf St, Utilico City",ACTIVE,2020-12-19
+8800010006,Casey Lindqvist,RES,"134 Riverside Dr, Utilico City",ACTIVE,2016-11-26
+8800010007,Riley Sutherland,RES,"121 Elm Grove, Utilico City",ACTIVE,2018-03-02
+8800010008,Avery Ashworth,RES,"205 Riverside Dr, Utilico City",ACTIVE,2019-05-13
+8800010009,Quinn Hollis,RES,"49 Orchard Close, Utilico City",ACTIVE,2024-02-14
+8800010010,Harper Oduya,RES,"106 Riverside Dr, Utilico City",ACTIVE,2015-01-22
+8800010011,Rowan Vance,RES,"206 Beacon Ave, Utilico City",ACTIVE,2016-02-11
+8800010012,Elliot Dunmore,RES,"153 Kings Rd, Utilico City",ACTIVE,2024-02-17
+8800010013,Sasha Kowalski,RES,"207 Elm Grove, Utilico City",ACTIVE,2017-02-09
+8800010014,Noor Rasmussen,RES,"141 Orchard Close, Utilico City",ACTIVE,2020-05-26
+8800010015,Mateo Zubiri,RES,"16 Mill Lane, Utilico City",ACTIVE,2016-11-06
+8800010016,Ingrid Grant,RES,"28 Mill Lane, Utilico City",ACTIVE,2018-07-06
+8800010017,Kofi Nakamura,RES,"136 Orchard Close, Utilico City",ACTIVE,2021-04-25
+8800010018,Mei Underwood,RES,"2 Harbour Rd, Utilico City",ACTIVE,2022-02-19
+8800010019,Tomas Clarke,RES,"118 Kings Rd, Utilico City",ACTIVE,2023-02-16
+8800010020,Leila Jansen,RES,"147 Orchard Close, Utilico City",ACTIVE,2016-01-25
+8800010021,Owen Quintero,RES,"19 Wharf St, Utilico City",ACTIVE,2017-10-11
+8800010022,Freya Yates,RES,"218 Riverside Dr, Utilico City",ACTIVE,2023-04-23
+8800010023,Ravi Fairweather,RES,"32 Elm Grove, Utilico City",ACTIVE,2016-09-14
+8800010024,Chloe Marsh,RES,"175 Orchard Close, Utilico City",ACTIVE,2015-02-12
+8800010025,Hugo Thorne,RES,"236 Riverside Dr, Utilico City",ACTIVE,2018-05-02
+8800010040,Fernhill Joinery,COM,"27 Quarry Way, Utilico City",ACTIVE,2020-08-19
+8800010041,Bluegate Pharmacy,COM,"228 Riverside Dr, Utilico City",ACTIVE,2023-01-05
+8800010042,Ridgeway Auto Care,COM,"135 Orchard Close, Utilico City",ACTIVE,2016-06-21
+8800010043,Saltmarsh Cafe,COM,"113 Mill Lane, Utilico City",ACTIVE,2015-08-08
+8800010044,Oakline Fitness,COM,"75 Riverside Dr, Utilico City",ACTIVE,2015-12-14
+8800010045,Peregrine Tailors,COM,"233 Station St, Utilico City",ACTIVE,2022-09-25
+8800010046,Granite Row Books,COM,"240 Quarry Way, Utilico City",ACTIVE,2018-04-28
+8800010047,Lantern Bay Hotel,COM,"84 Mill Lane, Utilico City",ACTIVE,2021-06-05
+8800010048,Sable & Finch Design,COM,"124 Harbour Rd, Utilico City",ACTIVE,2019-11-18
+8800010049,Thistle Vet Clinic,COM,"127 Station St, Utilico City",ACTIVE,2023-04-12
+8800010101,Harbourline Logistics Ltd,COM,"174 Kings Rd, Utilico City",ACTIVE,2016-08-18
+8800010214,Dana Whitfield,RES,"89 Orchard Close, Utilico City",ACTIVE,2021-10-12
+8800010417,Copperleaf Studio,COM,"212 Wharf St, Utilico City",ACTIVE,2018-08-03
+8800010322,Luis Ferreira,RES,"37 Wharf St, Utilico City",ACTIVE,2017-04-08
+8800010388,Priya Natarajan,RES,"24 Elm Grove, Utilico City",ACTIVE,2016-02-08
+8800010455,Brightwater Bakery,COM,"115 Wharf St, Utilico City",ACTIVE,2019-02-25
+8800010512,Northgate Dental,COM,"233 Quarry Way, Utilico City",ACTIVE,2019-04-19
+8800010601,Eastside Florist,COM,"69 Harbour Rd, Utilico City",ACTIVE,2015-11-18
+8800010602,Gareth Owens,RES,"70 Quarry Way, Utilico City",ACTIVE,2015-04-10
+8800010603,Rosa Delgado,RES,"25 Station St, Utilico City",ACTIVE,2023-03-04
+8800010604,Kestrel Print Co,COM,"69 Station St, Utilico City",ACTIVE,2017-12-27
+8800010605,Amara Osei,RES,"198 Quarry Way, Utilico City",ACTIVE,2016-03-12

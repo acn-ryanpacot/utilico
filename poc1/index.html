@@ -1,0 +1,2268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disconnect-vs-Billing Detector</title>
+<style>
+/* =========================================================================
+   THEME TOKENS (light default; dark via prefers-color-scheme or the toggle)
+   ========================================================================= */
+:root{
+  --bg:#f3f5f8; --surface:#ffffff; --surface-2:#f7f9fb; --surface-3:#eef2f6;
+  --border:#dfe5ec; --border-strong:#c6d0da;
+  --text:#14202b; --muted:#566576; --faint:#8794a3;
+  --accent:#0a6c8c; --accent-hover:#085a75; --accent-soft:#e2f0f5; --accent-ink:#ffffff;
+  --high:#b42318; --high-bg:#fdecea; --med:#9a5a06; --med-bg:#fdf1d8; --low:#1d5fae; --low-bg:#e6effb;
+  --review:#6b3fb0; --review-bg:#efe8fb;
+  --pass:#16794a; --pass-bg:#e2f4ea; --fail:#b42318; --fail-bg:#fdecea;
+  --actual:#3a7fc1; --est:#e0912a; --zero:#9aa7b4;
+  --band-a:#f4f7fa; --band-b:#e9eef4; --win:#b42318;
+  --m-disc:#b42318; --m-rec:#16794a; --m-bill:#6b3fb0; --m-stop:#9a5a06;
+  --sys-oms:#0a6c8c; --sys-ccb:#6b3fb0; --sys-mdm:#9a5a06; --sys-xw:#4b5b6b; --sys-int:#b42318; --sys-crm:#16794a; --sys-gl:#1d5fae;
+  --shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.07);
+  --shadow-lg:0 16px 40px rgba(16,24,40,.22);
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d1218; --surface:#141b23; --surface-2:#18212b; --surface-3:#1e2833;
+    --border:#263240; --border-strong:#36455a;
+    --text:#e4ebf2; --muted:#9aa8b7; --faint:#6f7e8e;
+    --accent:#3fa7c9; --accent-hover:#5cb9d8; --accent-soft:rgba(63,167,201,.15); --accent-ink:#04141b;
+    --high:#ff8a7a; --high-bg:rgba(255,138,122,.14); --med:#f3b25b; --med-bg:rgba(243,178,91,.14); --low:#86b6f2; --low-bg:rgba(134,182,242,.14);
+    --review:#bb9df2; --review-bg:rgba(187,157,242,.15);
+    --pass:#5fd39a; --pass-bg:rgba(95,211,154,.13); --fail:#ff8a7a; --fail-bg:rgba(255,138,122,.14);
+    --actual:#5b9ee0; --est:#f0a640; --zero:#5d6b7a;
+    --band-a:#161e27; --band-b:#1c2631; --win:#ff8a7a;
+    --m-disc:#ff8a7a; --m-rec:#5fd39a; --m-bill:#bb9df2; --m-stop:#f3b25b;
+    --sys-oms:#3fa7c9; --sys-ccb:#bb9df2; --sys-mdm:#f3b25b; --sys-xw:#9aa8b7; --sys-int:#ff8a7a; --sys-crm:#5fd39a; --sys-gl:#86b6f2;
+    --shadow:0 1px 2px rgba(0,0,0,.3); --shadow-lg:0 16px 40px rgba(0,0,0,.55);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d1218; --surface:#141b23; --surface-2:#18212b; --surface-3:#1e2833;
+  --border:#263240; --border-strong:#36455a;
+  --text:#e4ebf2; --muted:#9aa8b7; --faint:#6f7e8e;
+  --accent:#3fa7c9; --accent-hover:#5cb9d8; --accent-soft:rgba(63,167,201,.15); --accent-ink:#04141b;
+  --high:#ff8a7a; --high-bg:rgba(255,138,122,.14); --med:#f3b25b; --med-bg:rgba(243,178,91,.14); --low:#86b6f2; --low-bg:rgba(134,182,242,.14);
+  --review:#bb9df2; --review-bg:rgba(187,157,242,.15);
+  --pass:#5fd39a; --pass-bg:rgba(95,211,154,.13); --fail:#ff8a7a; --fail-bg:rgba(255,138,122,.14);
+  --actual:#5b9ee0; --est:#f0a640; --zero:#5d6b7a;
+  --band-a:#161e27; --band-b:#1c2631; --win:#ff8a7a;
+  --m-disc:#ff8a7a; --m-rec:#5fd39a; --m-bill:#bb9df2; --m-stop:#f3b25b;
+  --sys-oms:#3fa7c9; --sys-ccb:#bb9df2; --sys-mdm:#f3b25b; --sys-xw:#9aa8b7; --sys-int:#ff8a7a; --sys-crm:#5fd39a; --sys-gl:#86b6f2;
+  --shadow:0 1px 2px rgba(0,0,0,.3); --shadow-lg:0 16px 40px rgba(0,0,0,.55);
+  color-scheme:dark;
+}
+
+/* =========================================================================
+   BASE & LAYOUT
+   ========================================================================= */
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+body.no-scroll{overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+.wrap{max-width:1440px;margin:0 auto;padding:0 24px}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:12.5px}
+.muted{color:var(--muted)} .faint{color:var(--faint)}
+[hidden]{display:none !important}
+
+.app-header{background:var(--surface);border-bottom:1px solid var(--border)}
+.header-inner{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:14px;padding-bottom:14px}
+.brand{display:flex;align-items:center;gap:12px;min-width:0}
+.logo{flex:none;width:38px;height:38px;border-radius:10px;background:var(--accent);display:grid;place-items:center;color:var(--accent-ink)}
+h1{font-size:18px;margin:0;font-weight:650;letter-spacing:-.01em}
+.sub{margin:2px 0 0;color:var(--muted);font-size:13px}
+.header-right{display:flex;align-items:center;gap:10px;min-width:0}
+.source-line{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);background:var(--surface-3);border:1px solid var(--border);padding:4px 10px;border-radius:8px;min-width:0;max-width:640px}
+.source-line .path{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
+.source-line b{color:var(--text);white-space:nowrap}
+
+.controls{position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:var(--shadow)}
+.controls-inner{display:flex;flex-wrap:wrap;align-items:center;gap:10px 20px;padding-top:10px;padding-bottom:10px}
+.ctl{display:flex;align-items:center;gap:8px}
+.ctl-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.seg{display:inline-flex;background:var(--surface-3);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px;flex-wrap:wrap}
+.seg button{border:0;background:transparent;padding:6px 12px;border-radius:6px;cursor:pointer;color:var(--muted);font-weight:550;font-size:13px;white-space:nowrap}
+.seg button:hover{color:var(--text)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--text);box-shadow:var(--shadow);outline:1px solid var(--border)}
+input[type=date],input[type=search],select{background:var(--surface);border:1px solid var(--border-strong);border-radius:7px;padding:5px 8px;font-size:13px}
+input[type=date]:disabled{opacity:.45}
+input:focus-visible,select:focus-visible,button:focus-visible,tr:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:550;user-select:none}
+.switch input{position:absolute;opacity:0;width:1px;height:1px}
+.switch .track{width:34px;height:20px;border-radius:999px;background:var(--border-strong);position:relative;transition:background .15s}
+.switch .track::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.switch input:checked + .track{background:var(--accent)}
+.switch input:checked + .track::after{transform:translateX(14px)}
+.switch input:focus-visible + .track{outline:2px solid var(--accent);outline-offset:2px}
+.run-group{display:flex;align-items:center;gap:8px;margin-left:auto}
+.run-status{font-size:12.5px;color:var(--muted);min-width:200px}
+.run-status .ok{color:var(--pass);font-weight:600}
+
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border-strong);background:var(--surface);border-radius:8px;padding:7px 14px;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--surface-3)}
+.btn:disabled{opacity:.55;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.primary:disabled{opacity:.75;cursor:progress}
+.btn.sm{padding:5px 10px;font-size:12.5px}
+.btn.ghost{background:transparent}
+.spinner{width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+main{padding-top:18px;padding-bottom:48px}
+
+.banner{display:flex;align-items:flex-start;gap:12px;background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:10px;padding:10px 14px;margin-bottom:16px}
+.banner.warn{background:var(--med-bg);border-color:color-mix(in srgb,var(--med) 40%,transparent)}
+.banner .b-icon{color:var(--accent);flex:none;margin-top:1px}
+.banner.warn .b-icon{color:var(--med)}
+.banner .b-text{flex:1}
+.banner .b-close{border:0;background:transparent;cursor:pointer;color:var(--muted);font-size:18px;line-height:1;padding:0 4px}
+
+.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:18px}
+@media (max-width:1180px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow);min-width:0}
+.kpi .k-label{font-size:12px;color:var(--muted);font-weight:600}
+.kpi .k-value{font-size:24px;font-weight:680;letter-spacing:-.02em;margin-top:2px;font-variant-numeric:tabular-nums}
+.kpi .k-sub{font-size:12px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi.emph{border-color:color-mix(in srgb,var(--accent) 45%,var(--border))}
+.kpi.emph .k-value{color:var(--accent)}
+.kpi.warn .k-value{color:var(--high)}
+.kpi.dim .k-value{color:var(--faint)}
+
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.tabs button{border:0;background:transparent;padding:9px 14px;cursor:pointer;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;align-items:center;gap:7px}
+.tabs button[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
+.t-badge{font-size:11px;padding:1px 7px;border-radius:999px;font-weight:700}
+.t-badge.pass{background:var(--pass-bg);color:var(--pass)}
+.t-badge.fail{background:var(--fail-bg);color:var(--fail)}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);margin-bottom:16px;min-width:0}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--border)}
+.card-head h2{font-size:15px;margin:0;font-weight:650}
+.card-head .count{color:var(--muted);font-weight:500;margin-left:6px}
+.card-head .tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.card-body{padding:14px 16px}
+.card-foot{padding:10px 16px;border-top:1px solid var(--border);font-size:12.5px;color:var(--muted)}
+.empty{padding:22px 16px;color:var(--muted);text-align:center}
+
+.table-wrap{overflow-x:auto}
+table.grid{width:100%;border-collapse:collapse;font-size:13px}
+.grid th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-weight:600;color:var(--muted);font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;z-index:1}
+.grid th.sortable{cursor:pointer;user-select:none}
+.grid th.sortable:hover{color:var(--text)}
+.grid th .arrow{font-size:10px;margin-left:3px;opacity:.8}
+.grid td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+.grid tr:last-child td{border-bottom:0}
+.grid td.r,.grid th.r{text-align:right}
+.grid tbody tr.clickable{cursor:pointer}
+.grid tbody tr.clickable:hover td{background:var(--surface-2)}
+.grid tr.total td{font-weight:650;background:var(--surface-2)}
+.grid .sub-line{font-size:11.5px;color:var(--faint);margin-top:1px}
+.grid.compact td,.grid.compact th{padding:6px 9px}
+
+.badge{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.03em;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.sev-HIGH,.sev-HOLD,.st-ERROR{background:var(--high-bg);color:var(--high)}
+.sev-MEDIUM,.st-SKIPPED{background:var(--med-bg);color:var(--med)}
+.sev-LOW{background:var(--low-bg);color:var(--low)}
+.sev-REVIEW,.sev-C3{background:var(--review-bg);color:var(--review)}
+.st-SUCCESS{background:var(--pass-bg);color:var(--pass)}
+.st-NONE{background:var(--surface-3);color:var(--muted)}
+.rule{display:inline-block;font-family:ui-monospace,Consolas,monospace;font-size:11px;font-weight:600;padding:1px 6px;border-radius:5px;background:var(--surface-3);border:1px solid var(--border);margin:0 3px 3px 0}
+.case-tag{display:inline-block;font-size:10.5px;font-weight:800;padding:1px 6px;border-radius:5px;background:var(--text);color:var(--surface);margin-left:6px;vertical-align:1px;letter-spacing:.02em}
+.case-tag.n{background:var(--pass);color:var(--surface)}
+.sys{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 7px;border-radius:5px;border:1px solid currentColor;letter-spacing:.03em;white-space:nowrap}
+.sys-OMS{color:var(--sys-oms)} .sys-CCB{color:var(--sys-ccb)} .sys-MDM{color:var(--sys-mdm)} .sys-XWALK{color:var(--sys-xw)} .sys-INT{color:var(--sys-int)} .sys-CRM{color:var(--sys-crm)} .sys-GL{color:var(--sys-gl)} .sys-KEY{color:var(--muted)}
+.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent);text-underline-offset:2px;text-align:left}
+.linkish:hover{text-decoration-color:var(--accent)}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.filters label{font-size:12px;color:var(--muted);font-weight:600}
+
+details.legend summary{cursor:pointer;font-weight:600;padding:12px 16px;list-style:none}
+details.legend summary::-webkit-details-marker{display:none}
+details.legend summary::before{content:"▸ ";color:var(--muted)}
+details.legend[open] summary::before{content:"▾ "}
+.legend-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 28px;padding:0 16px 14px;font-size:13px}
+@media (max-width:820px){.legend-grid{grid-template-columns:1fr}}
+.legend-grid dt{font-weight:650}
+.legend-grid dd{margin:0 0 6px;color:var(--muted)}
+
+/* Drawer */
+.scrim{position:fixed;inset:0;background:rgba(8,14,20,.45);z-index:40}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(1000px,100vw);background:var(--bg);z-index:41;box-shadow:var(--shadow-lg);display:flex;flex-direction:column;border-left:1px solid var(--border)}
+.drawer-head{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;gap:14px;align-items:flex-start}
+.drawer-head .eyebrow{font-size:11.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.drawer-head h2{margin:2px 0 3px;font-size:19px;font-weight:680}
+.drawer-head .meta{font-size:12.5px;color:var(--muted)}
+.drawer-head .close{border:1px solid var(--border);background:var(--surface);border-radius:8px;width:34px;height:34px;cursor:pointer;font-size:18px;color:var(--muted);flex:none}
+.drawer-body{overflow:auto;padding:16px 20px 40px}
+.drawer h3{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:22px 0 8px}
+.action-box{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:10px;padding:12px 14px}
+.action-box strong{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin-bottom:3px}
+.action-box p{margin:0;font-size:14px}
+.mini{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:12px}
+.mini div{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:9px 12px}
+.mini span{display:block;font-size:11.5px;color:var(--muted);font-weight:600}
+.mini b{font-size:18px;font-variant-numeric:tabular-nums}
+.tl-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 10px 6px}
+.tl svg{width:100%;height:auto;display:block}
+.tl text{fill:var(--muted);font-size:10.5px;font-family:inherit}
+.tl .t-strong{fill:var(--text);font-weight:600}
+.tl .band-a{fill:var(--band-a)} .tl .band-b{fill:var(--band-b)}
+.tl .band-hit{stroke:var(--high);stroke-width:1;stroke-dasharray:3 3}
+.tl .hatch-line{stroke:var(--win);stroke-width:1.6;opacity:.32}
+.tl .win-edge{stroke:var(--win);opacity:.6}
+.tl .bar-a{fill:var(--actual)} .tl .bar-e{fill:var(--est)} .tl .bar-z{fill:var(--zero)}
+.tl .axis{stroke:var(--border-strong);stroke-width:1}
+.tl .grid-l{stroke:var(--border);stroke-width:1;stroke-dasharray:2 3}
+.tl .mk{stroke-width:1.6}
+.tl .mk-disc{stroke:var(--m-disc)} .tl .mk-rec{stroke:var(--m-rec)} .tl .mk-bill{stroke:var(--m-bill);stroke-dasharray:4 3} .tl .mk-stop{stroke:var(--m-stop)}
+.tl .lb-disc{fill:var(--m-disc)} .tl .lb-rec{fill:var(--m-rec)} .tl .lb-bill{fill:var(--m-bill)} .tl .lb-stop{fill:var(--m-stop)}
+.tl-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--muted);padding:6px 6px 2px}
+.tl-legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px}
+.tl-legend i.line{width:14px;height:0;border-top:2px solid;border-radius:0;vertical-align:3px}
+.tl-legend i.dash{border-top-style:dashed}
+.rule-list{display:grid;gap:6px}
+.rule-list div{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px}
+.crm-list{display:grid;gap:8px}
+.crm-list details{background:var(--surface);border:1px solid var(--border);border-radius:8px}
+.crm-list summary{cursor:pointer;padding:8px 12px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;list-style:none}
+.crm-list summary::-webkit-details-marker{display:none}
+.crm-list summary::before{content:"▸";color:var(--muted)}
+.crm-list details[open] summary::before{content:"▾"}
+.crm-list .crm-notes{padding:0 12px 10px 30px;font-size:13px;color:var(--muted);white-space:pre-wrap}
+
+/* Self-test */
+.matrix{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+@media (max-width:980px){.matrix{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.mx{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;cursor:pointer;text-align:left;box-shadow:var(--shadow)}
+.mx:hover{border-color:var(--border-strong)}
+.mx.current{outline:2px solid var(--accent)}
+.mx .mx-title{font-size:12.5px;font-weight:650;color:var(--muted)}
+.mx .mx-res{font-size:20px;font-weight:750;margin-top:3px}
+.mx .mx-res.pass{color:var(--pass)} .mx .mx-res.fail{color:var(--fail)} .mx .mx-res.na{color:var(--faint)}
+.res{font-weight:750;font-size:12px;padding:2px 8px;border-radius:6px}
+.res.pass{background:var(--pass-bg);color:var(--pass)}
+.res.fail{background:var(--fail-bg);color:var(--fail)}
+.overall{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;margin-bottom:16px;font-weight:650;flex-wrap:wrap}
+.overall.pass{background:var(--pass-bg);color:var(--pass);border:1px solid color-mix(in srgb,var(--pass) 35%,transparent)}
+.overall.fail{background:var(--fail-bg);color:var(--fail);border:1px solid color-mix(in srgb,var(--fail) 35%,transparent)}
+.overall .o-big{font-size:22px}
+.overall .o-sub{font-weight:500;color:var(--text);opacity:.85;font-size:13px}
+
+/* Loading / offline / errors */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:22px 24px;max-width:860px;margin:24px auto}
+.panel h2{margin:0 0 8px;font-size:18px}
+.panel p{margin:8px 0;color:var(--muted)}
+.panel pre{background:var(--surface-3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;overflow:auto;font-size:12.5px}
+.panel ul{margin:8px 0;padding-left:20px}
+.panel li{margin:3px 0}
+.panel.error{border-color:color-mix(in srgb,var(--high) 45%,var(--border))}
+.panel.error h2{color:var(--high)}
+.loading{display:flex;align-items:center;gap:10px;color:var(--muted);padding:30px 0;justify-content:center}
+
+.modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;background:rgba(8,14,20,.5);padding:20px}
+.modal-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-lg);width:min(860px,100%);max-height:90vh;display:flex;flex-direction:column}
+.modal-box header{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.modal-box header h2{font-size:15px;margin:0}
+.modal-box .m-body{padding:14px 18px;display:flex;flex-direction:column;gap:10px;min-height:0}
+.modal-box textarea{width:100%;height:46vh;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:12px;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;padding:10px}
+.modal-box footer{padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
+
+.note{font-size:12.5px;color:var(--muted)}
+.explorer-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.explorer-tools input[type=search]{width:280px;max-width:100%}
+.explorer-table{max-height:62vh;overflow:auto}
+.pager{display:flex;gap:8px;align-items:center}
+@media (max-width:720px){
+  .wrap{padding:0 16px}
+  .run-group{margin-left:0}
+  .run-status{min-width:0}
+  .source-line{display:none}
+}
+
+/* =========================================================================
+   APP SHELL: header, sign-in, side navigation, workflow screens
+   ========================================================================= */
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.app-header{position:sticky;top:0;z-index:30}
+.app-header .header-inner{padding:10px 20px;flex-wrap:wrap}
+.hdr-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.hdr-controls select{max-width:250px}
+.agent-badge{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--review-bg);color:var(--review);border:1px solid color-mix(in srgb,var(--review) 35%,transparent);white-space:nowrap}
+.user-chip{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:999px;padding:3px 4px 3px 4px;background:var(--surface-2)}
+.avatar{flex:none;width:28px;height:28px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-size:11px;font-weight:800}
+.user-chip .who{font-size:12.5px;line-height:1.15;font-weight:650}
+.user-chip .who small{display:block;color:var(--muted);font-size:11px;font-weight:500}
+.source-bar{border-top:1px solid var(--border);padding:4px 20px;background:var(--surface-2)}
+.source-bar .source-line{background:transparent;border:0;padding:0;max-width:none}
+.shell{display:grid;grid-template-columns:224px minmax(0,1fr);min-height:calc(100vh - 90px)}
+.sidenav{border-right:1px solid var(--border);background:var(--surface);padding:10px 8px 30px;position:sticky;top:90px;align-self:start;height:calc(100vh - 90px);overflow:auto}
+.sidenav a{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border-radius:8px;color:var(--muted);text-decoration:none;font-weight:600;font-size:13.5px}
+.sidenav a:hover{background:var(--surface-3);color:var(--text)}
+.sidenav a.on{background:var(--accent-soft);color:var(--accent)}
+.sidenav a .lvl{font-size:10px;font-weight:700;color:var(--faint);border:1px solid var(--border);border-radius:4px;padding:0 4px}
+.sidenav .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);padding:12px 10px 4px;font-weight:700}
+.sidenav .cnt{font-size:11px;font-weight:800;background:var(--high);color:#fff;border-radius:999px;padding:0 7px}
+.page{padding:18px 24px 60px;min-width:0}
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.page-head h2{margin:0;font-size:20px;letter-spacing:-.01em}
+.page-head p{margin:3px 0 0;color:var(--muted);font-size:13px}
+.stage{padding:0 16px}
+@media (max-width:900px){.shell{grid-template-columns:1fr}.sidenav{position:static;height:auto;display:flex;flex-wrap:wrap;gap:4px;border-right:0;border-bottom:1px solid var(--border)}.sidenav .grp{display:none}}
+.signin{max-width:1120px;margin:28px auto;padding:0 20px}
+.signin h2{font-size:22px;margin:0 0 4px}
+.user-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}
+@media (max-width:980px){.user-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.user-card{text-align:left;border:1px solid var(--border);background:var(--surface);border-radius:12px;padding:14px;cursor:pointer;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px}
+.user-card:hover{border-color:var(--accent)}
+.user-card .uc-top{display:flex;gap:10px;align-items:center}
+.user-card .uc-name{font-weight:700}
+.user-card .uc-role{font-size:12px;color:var(--muted)}
+.user-card .uc-can{font-size:11.5px;color:var(--faint)}
+.user-card .pill{align-self:flex-start}
+.state-badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--surface-3);color:var(--text);border:1px solid var(--border);white-space:nowrap}
+.state-badge.s-done{background:var(--pass-bg);color:var(--pass);border-color:transparent}
+.state-badge.s-closed{color:var(--muted)}
+.state-badge.s-ret{background:var(--high-bg);color:var(--high);border-color:transparent}
+.state-badge.s-agent{background:var(--review-bg);color:var(--review);border-color:transparent}
+.state-badge.s-wait{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.type-badge{display:inline-block;font-size:10.5px;font-weight:800;letter-spacing:.04em;padding:1px 6px;border-radius:5px;border:1px solid currentColor;white-space:nowrap}
+.t-PREVENT{color:var(--high)} .t-ADVANCE{color:var(--med)} .t-REMEDIATE{color:var(--low)} .t-REVENUE_PROTECTION{color:var(--review)}
+.o-HELD{background:var(--high-bg);color:var(--high)} .o-PASSED{background:var(--pass-bg);color:var(--pass)} .o-NON_BLOCKING{background:var(--med-bg);color:var(--med)}
+.states-line{display:flex;flex-wrap:wrap;gap:4px;margin:10px 0 2px}
+.states-line span{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);color:var(--faint);background:var(--surface)}
+.states-line span.done{color:var(--pass);border-color:color-mix(in srgb,var(--pass) 40%,transparent);background:var(--pass-bg)}
+.states-line span.cur{color:var(--accent-ink);background:var(--accent);border-color:var(--accent);font-weight:700}
+.states-line span.skip{opacity:.45;text-decoration:line-through}
+.grid2{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:1150px){.grid2{grid-template-columns:1fr}}
+.activity{max-height:440px;overflow:auto;font-size:12.5px}
+.a-row{display:grid;grid-template-columns:26px 170px minmax(0,1fr);gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);animation:fadein .35s ease-out}
+@keyframes fadein{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.a-row .a-n{color:var(--faint);font-variant-numeric:tabular-nums}
+.a-row .a-tool{font-family:ui-monospace,Consolas,monospace;font-weight:700;color:var(--accent);word-break:break-word}
+.a-row .a-agent{display:block;font-family:inherit;font-weight:500;font-size:10.5px;color:var(--faint)}
+.a-row.bad .a-tool{color:var(--high)}
+.a-row .a-args{display:block;color:var(--faint);font-family:ui-monospace,Consolas,monospace;font-size:11px;word-break:break-word}
+.working{display:flex;align-items:center;gap:8px;padding:8px 12px;color:var(--review);font-weight:600;font-size:12.5px}
+.action-panel{border:1px solid color-mix(in srgb,var(--accent) 60%,var(--border));box-shadow:0 0 0 3px var(--accent-soft)}
+.action-panel .card-head{background:var(--accent-soft)}
+.form-row{display:flex;flex-direction:column;gap:4px;margin:10px 0}
+.form-row label,.form-label{font-size:12px;font-weight:650;color:var(--muted)}
+textarea.input,input.input,select.input{background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;padding:7px 9px;font-size:13px;width:100%}
+textarea.input{min-height:70px;resize:vertical}
+textarea.letter-edit{min-height:180px;font-family:inherit}
+.opt-list label{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1px solid var(--border);border-radius:9px;margin-bottom:6px;cursor:pointer;background:var(--surface)}
+.opt-list label:hover{border-color:var(--border-strong)}
+.opt-list label.rec{border-color:color-mix(in srgb,var(--accent) 60%,transparent)}
+.opt-list input{margin-top:3px}
+.opt-list .o-label{font-weight:650}
+.opt-list .o-sub{font-size:12px;color:var(--muted)}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.btn.danger{border-color:color-mix(in srgb,var(--high) 50%,transparent);color:var(--high)}
+.funnel .f-row{display:grid;grid-template-columns:170px minmax(0,1fr) 34px;gap:10px;align-items:center;font-size:12.5px;padding:3px 0}
+.funnel .f-track{height:12px;border-radius:4px;background:var(--surface-3);overflow:hidden}
+.funnel .f-bar{height:100%;border-radius:4px;background:var(--accent);min-width:2px}
+.funnel .f-row.zero{color:var(--faint)}
+.funnel .f-row.zero .f-bar{background:transparent}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--surface);padding:10px 16px;border-radius:10px;z-index:80;box-shadow:var(--shadow-lg);max-width:80vw;font-weight:600;font-size:13px}
+.toast.err{background:var(--high);color:#fff}
+.ov-row td{background:color-mix(in srgb,var(--est) 18%,transparent) !important}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;background:var(--surface-3);border:1px solid var(--border);white-space:nowrap}
+.letter{white-space:pre-wrap;font-size:13px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:0}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 16px;font-size:13px;margin:0}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;min-width:0;word-break:break-word}
+.impact{font-variant-numeric:tabular-nums;white-space:nowrap}
+.impact .arrow{color:var(--faint);margin:0 4px}
+.impact .after{font-weight:700;color:var(--pass)}
+.muted-box{padding:14px 16px;color:var(--muted)}
+.compare{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center}
+.compare .cbox{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+.compare .cbox b{font-family:ui-monospace,Consolas,monospace;font-size:16px}
+.compare .vs{color:var(--faint);font-size:20px}
+.feed-row td{font-size:12.5px}
+.chip-filter{display:inline-flex;gap:2px;background:var(--surface-3);border:1px solid var(--border);border-radius:8px;padding:2px}
+.chip-filter button{border:0;background:transparent;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer}
+.chip-filter button[aria-pressed="true"]{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.grid-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+@media (max-width:1000px){.grid-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.demo-card .card-body{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-inner">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+      </div>
+      <div>
+        <h1>POC 1 — Disconnect-vs-Billing Detector</h1>
+        <p class="sub">Utilico Energy · OMS × CC&amp;B × MDM · Pre-bill guard</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="agent-badge" id="agentBadge" hidden title="Deterministic scripted agent; no network, no API key">Agent: mock (scripted)</span>
+      <div class="hdr-controls" id="hdrControls" hidden>
+        <label class="sr" for="dsSelect">Dataset</label><select id="dsSelect"></select>
+        <label class="sr" for="scSelect">Scenario</label><select id="scSelect"></select>
+        <label class="switch" title="Show case codes E1–E7 / N1–N5 from answer_key.csv"><input type="checkbox" id="hdrLabels"><span class="track"></span><span>Presenter labels</span></label>
+        <button class="btn sm" id="workBtn" type="button">My Work <span class="t-badge fail" id="workCount">0</span></button>
+        <div class="user-chip" id="userChip"></div>
+      </div>
+      <button class="btn ghost sm" id="themeBtn" type="button" title="Cycle colour theme">Theme: Auto</button>
+    </div>
+  </div>
+  <div class="source-bar" id="sourceBar" hidden><div class="source-line" id="sourceLine"></div></div>
+</header>
+
+<div class="shell" id="shell" hidden>
+  <nav class="sidenav" id="nav" aria-label="Screens"></nav>
+  <main class="page" id="view"></main>
+</div>
+<div id="stage" class="stage"><div class="loading"><span class="spinner"></span> Connecting to the local server…</div></div>
+
+<div id="scrim" class="scrim" hidden></div>
+<aside id="drawer" class="drawer" hidden aria-modal="true" role="dialog" aria-labelledby="drawerTitle"></aside>
+<div id="modal" class="modal" hidden role="dialog" aria-modal="true"></div>
+<div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
+<input type="file" id="folderInput" webkitdirectory directory multiple hidden>
+
+<script>
+'use strict';
+/* === ENGINE START === (sections 1–5 have no DOM dependencies; testable outside the browser) */
+
+/* =========================================================================
+   SECTION 1 — UTILITIES: rounding, dates, string distance, formatting
+   ========================================================================= */
+const money  = x => Math.round((x + 1e-9) * 100) / 100;   // round to cents
+const round1 = x => Math.round((x + 1e-9) * 10) / 10;     // kWh to 0.1
+const num    = s => (s === '' || s == null ? 0 : Number(s));
+const MS_DAY = 86400000;
+const toUTC = d => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10));
+const fromUTC = t => new Date(t).toISOString().slice(0, 10);
+const addDays = (d, n) => fromUTC(toUTC(d) + n * MS_DAY);
+const daysBetween = (a, b) => Math.round((toUTC(b) - toUTC(a)) / MS_DAY);
+const dateOf = ts => (ts || '').slice(0, 10);
+const maxStr = (a, b) => (a > b ? a : b);
+const minStr = (a, b) => (a < b ? a : b);
+function dayRange(a, b) {
+  const out = [];
+  for (let t = toUTC(a), e = toUTC(b); t <= e; t += MS_DAY) out.push(fromUTC(t));
+  return out;
+}
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+/** Treat look-alike characters as equal: letter O ≡ zero, letter I ≡ one. */
+const foldLookalikes = s => s.toUpperCase().replace(/O/g, '0').replace(/I/g, '1');
+const fmtMoney = n => (n < -0.004 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtKwh = n => Number(n).toLocaleString('en-US', { maximumFractionDigits: 1 });
+const fmtTs = ts => ts || '—';
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+/* =========================================================================
+   SECTION 2a — CSV PARSING & SCHEMA VALIDATION
+   ========================================================================= */
+/**
+ * RFC-4180-style parser: header row, CRLF or LF, quoted fields with commas, doubled quotes ("") and
+ * embedded line breaks. Nothing inside quotes is trimmed. Returns { headers, rows, issues }.
+ */
+function parseCSV(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);            // strip UTF-8 BOM
+  const records = [];
+  let row = [], field = '', inQuotes = false, i = 0;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }   // escaped quote
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++; continue;                                        // includes commas and line breaks
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === ',') { row.push(field); field = ''; i++; continue; }
+    if (c === '\r' || c === '\n') {
+      row.push(field); records.push(row); row = []; field = '';
+      i += (c === '\r' && text[i + 1] === '\n') ? 2 : 1;
+      continue;
+    }
+    field += c; i++;
+  }
+  if (field !== '' || row.length) { row.push(field); records.push(row); }
+  const issues = [];
+  if (inQuotes) issues.push('file ends inside a quoted field (unbalanced quote)');
+  const recs = records.filter(r => !(r.length === 1 && r[0] === ''));  // ignore blank lines
+  const headers = (recs.shift() || []).map(h => h.trim());
+  const rows = [];
+  let ragged = 0;
+  for (const r of recs) {
+    if (r.length !== headers.length) ragged++;
+    const o = {};
+    for (let j = 0; j < headers.length; j++) o[headers[j]] = r[j] !== undefined ? r[j] : '';
+    rows.push(o);
+  }
+  if (ragged) issues.push(`${ragged} record(s) have a different number of fields than the header`);
+  return { headers, rows, issues };
+}
+
+/** Expected files and exact column headers. `core` files are needed for detection. */
+const SCHEMA = {
+  'ccb_accounts.csv':            { sys: 'CCB',   core: true,  cols: ['account_id','customer_name','customer_class','mailing_address','account_status','created_date'] },
+  'ccb_service_agreements.csv':  { sys: 'CCB',   core: true,  cols: ['sa_id','account_id','ccb_sp_id','premise_address','tariff_code','sa_status','start_date','stop_date','stop_processed_at'] },
+  'ccb_bill_segments.csv':       { sys: 'CCB',   core: true,  cols: ['bill_id','sa_id','bill_type','period_start','period_end','bill_run_at','days_billed','kwh_billed','usage_quality','rate_per_kwh','consumption_amount','fixed_daily_charge','fixed_amount','total_amount','bill_status'] },
+  'ccb_tariffs.csv':             { sys: 'CCB',   core: true,  cols: ['tariff_code','description','rate_per_kwh','fixed_daily_charge','fixed_stops_on_stop_service','fixed_continues_on_nonpay'] },
+  'ccb_todo_entries.csv':        { sys: 'CCB',   core: true,  cols: ['todo_id','created_at','todo_type','related_entity','sa_id','message','priority','status','assigned_to'] },
+  'mdm_meters.csv':              { sys: 'MDM',   core: true,  cols: ['mdm_meter_id','mdm_sp_id','meter_type','connection_state','connection_state_updated_at'] },
+  'mdm_daily_reads.csv':         { sys: 'MDM',   core: true,  cols: ['read_id','mdm_meter_id','read_date','kwh','read_quality','vee_rule'] },
+  'oms_work_orders.csv':         { sys: 'OMS',   core: true,  cols: ['wo_id','oms_premise_id','wo_type','wo_subtype','status','created_at','completed_at','technician_id','notes'] },
+  'integration_message_log.csv': { sys: 'INT',   core: true,  cols: ['msg_id','source_system','target_system','message_type','wo_id','oms_premise_id','received_at','processed_at','status','retry_count','error_message'] },
+  'ref_id_crosswalk.csv':        { sys: 'XWALK', core: true,  cols: ['oms_premise_id','ccb_sp_id','mdm_meter_id'] },
+  'crm_cases.csv':               { sys: 'CRM',   core: false, cols: ['case_id','account_id','customer_name','opened_at','channel','category','subject','status','closed_at','billing_hold_set','linked_case_id','notes'] },
+  'gl_journal_lines.csv':        { sys: 'GL',    core: false, cols: ['je_id','je_line','posting_date','accounting_period','gl_account','gl_account_name','debit','credit','source_system','source_ref','sa_id','description'] },
+  'gl_periods.csv':              { sys: 'GL',    core: false, cols: ['accounting_period','status','closed_at'] },
+  'answer_key.csv':              { sys: 'KEY',   core: false, cols: ['case','customer_name','back_scan_result','severity','phantom_kwh_billed','credit_consumption','credit_fixed','credit_total','cause_and_notes','daily_check_2026_11_02'] },
+};
+const FILE_NAMES = Object.keys(SCHEMA);
+const SYS_NAME = { OMS: 'OMS', CCB: 'CC&B', MDM: 'MDM', XWALK: 'Master data', INT: 'Integration', CRM: 'CRM', GL: 'GL', KEY: 'Test oracle' };
+
+/** Check every expected file and column. Errors block detection; warnings only disable features. */
+function validateFiles(files) {
+  const errors = [], warnings = [];
+  for (const [name, spec] of Object.entries(SCHEMA)) {
+    const f = files[name];
+    if (!f) { (spec.core ? errors : warnings).push(`${name} is missing${spec.core ? '' : ' (related features disabled)'}`); continue; }
+    // answer_key's daily-check column name carries the as-of date, so accept any daily_check_YYYY_MM_DD
+    const missingCols = spec.cols.filter(c => !f.headers.includes(c) &&
+      !(name === 'answer_key.csv' && c.startsWith('daily_check_') && f.headers.some(h => /^daily_check_\d{4}_\d{2}_\d{2}$/.test(h))));
+    if (missingCols.length) (spec.core ? errors : warnings).push(`${name}: missing column(s) ${missingCols.join(', ')}`);
+    for (const iss of f.issues || []) warnings.push(`${name}: ${iss}`);
+    if (spec.core && !f.rows.length) errors.push(`${name} has no data rows`);
+  }
+  return { errors, warnings };
+}
+
+/* =========================================================================
+   SECTION 3 — INDEXING & DETECTION RULES
+   ========================================================================= */
+const STOP_SUBTYPES = new Set(['STOP_SERVICE', 'MOVE_OUT']);   // subtypes that should stop the SA
+const RULES = {
+  R1: 'A bill covers post-disconnect days',
+  R2: 'Estimated reads post-disconnect',
+  R5: 'SA ACTIVE despite a STOP_SERVICE/MOVE_OUT disconnect',
+  RT: 'Bill run after the disconnect but before stop_processed_at',
+  RV: 'Consumption recorded after the disconnect',
+};
+const CAUSE_TEXT = {
+  C1: 'No integration mapping — the OMS completion was never turned into a CC&B stop.',
+  C2: 'Integration failure — the stop message errored and the CC&B To Do was not worked.',
+  C3: 'ID mismatch — the OMS premise does not resolve through the ID cross-reference.',
+  C6: 'Timing race — the bill ran before CC&B processed the stop.',
+  'C4 + C5': 'Non-pay disconnect keeps the SA active by design, and MDM estimated usage while the meter was off.',
+  TAMPER: 'Possible failed disconnect or tamper — actual consumption recorded after the disconnect.',
+  NOMSG: 'No integration message found for this work order.',
+  OTHER: 'Unclassified — manual review.',
+};
+const CAUSE_FILTER_LABEL = { C1: 'C1 — no mapping', C2: 'C2 — integration failure', C3: 'C3 — ID mismatch', C6: 'C6 — timing race',
+  'C4 + C5': 'C4 + C5 — non-pay', TAMPER: 'Failed disconnect / tamper', NOMSG: 'No integration message', OTHER: 'Unclassified' };
+const SEV_RANK = { HIGH: 4, MEDIUM: 3, LOW: 2, REVIEW: 1 };
+
+/** Index all tables by their join keys. Called once per dataset load. */
+function buildIndex(files) {
+  const rows = n => (files[n] ? files[n].rows : []);
+  const ix = {
+    accountById: {}, tariff: {}, xwByPremise: {}, sasBySp: {}, saById: {}, billsBySa: {}, meterById: {},
+    readsByMeter: {}, wosByPremise: {}, msgsByWo: {}, todosByEntity: {}, todosBySa: {}, crmByAccount: {},
+    glByRef: {}, periodByKey: {}, minRead: null, maxRead: null, minBill: null, maxBill: null, cadence: null,
+  };
+  for (const a of rows('ccb_accounts.csv')) ix.accountById[a.account_id] = a;
+  for (const t of rows('ccb_tariffs.csv')) ix.tariff[t.tariff_code] = t;
+  for (const x of rows('ref_id_crosswalk.csv')) ix.xwByPremise[x.oms_premise_id] = x;
+  for (const s of rows('ccb_service_agreements.csv')) { (ix.sasBySp[s.ccb_sp_id] ||= []).push(s); ix.saById[s.sa_id] = s; }
+  for (const b of rows('ccb_bill_segments.csv')) {
+    (ix.billsBySa[b.sa_id] ||= []).push(b);
+    ix.minBill = ix.minBill ? minStr(ix.minBill, b.period_start) : b.period_start;
+    ix.maxBill = ix.maxBill ? maxStr(ix.maxBill, b.period_end) : b.period_end;
+  }
+  for (const m of rows('mdm_meters.csv')) ix.meterById[m.mdm_meter_id] = m;
+  for (const r of rows('mdm_daily_reads.csv')) {
+    r._kwh = num(r.kwh);
+    (ix.readsByMeter[r.mdm_meter_id] ||= {})[r.read_date] = r;
+    ix.minRead = ix.minRead ? minStr(ix.minRead, r.read_date) : r.read_date;
+    ix.maxRead = ix.maxRead ? maxStr(ix.maxRead, r.read_date) : r.read_date;
+  }
+  for (const w of rows('oms_work_orders.csv')) (ix.wosByPremise[w.oms_premise_id] ||= []).push(w);
+  for (const m of rows('integration_message_log.csv')) (ix.msgsByWo[m.wo_id] ||= []).push(m);
+  for (const t of rows('ccb_todo_entries.csv')) { (ix.todosByEntity[t.related_entity] ||= []).push(t); if (t.sa_id) (ix.todosBySa[t.sa_id] ||= []).push(t); }
+  for (const c of rows('crm_cases.csv')) (ix.crmByAccount[c.account_id] ||= []).push(c);
+  for (const g of rows('gl_journal_lines.csv')) (ix.glByRef[g.source_ref] ||= []).push(g);
+  for (const p of rows('gl_periods.csv')) ix.periodByKey[p.accounting_period] = p;
+  ix.cadence = inferBillCadence(rows('ccb_bill_segments.csv'));
+  return ix;
+}
+
+/** Regular bill runs happen on a fixed day/time each month; learn it from the data (mode of REGULAR runs). */
+function inferBillCadence(bills) {
+  const counts = {};
+  for (const b of bills) if (b.bill_type === 'REGULAR' && b.bill_run_at) { const k = b.bill_run_at.slice(8); counts[k] = (counts[k] || 0) + 1; }
+  const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return best ? { day: +best[0].slice(0, 2), time: best[0].slice(3, 8) } : null;
+}
+/** Next expected regular bill run strictly after the end of the as-of day. */
+function nextBillRun(ix, asOf) {
+  if (!ix.cadence) return null;
+  let y = +asOf.slice(0, 4), m = +asOf.slice(5, 7);
+  for (let k = 0; k < 3; k++) {
+    const ts = `${y}-${String(m).padStart(2, '0')}-${String(ix.cadence.day).padStart(2, '0')} ${ix.cadence.time}`;
+    if (ts > asOf + ' 23:59') return ts;
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return null;
+}
+
+/** Step 2: OMS premise → crosswalk → CC&B service point (all SAs on it) + MDM meter. */
+function resolvePremise(ix, premise, onDate) {
+  const xw = ix.xwByPremise[premise];
+  if (!xw) return { ok: false, reason: `Premise ${premise} not found in ref_id_crosswalk` };
+  const spSas = ix.sasBySp[xw.ccb_sp_id] || [];
+  if (!spSas.length) return { ok: false, xw, reason: `No CC&B SA on service point ${xw.ccb_sp_id}` };
+  // Don't assume one SA per service point: pick the SA in force on the disconnect date.
+  const sa = saCovering(spSas, onDate) ||
+    spSas.filter(s => s.start_date <= onDate).sort((a, b) => b.start_date.localeCompare(a.start_date))[0] || spSas[0];
+  return { ok: true, xw, sa, spSas, account: ix.accountById[sa.account_id] || null, meter: ix.meterById[xw.mdm_meter_id] || null };
+}
+const saCovering = (sas, d) => sas.find(s => s.start_date <= d && (!s.stop_date || s.stop_date >= d));
+
+/** Step 3: the disconnect day is billable; the window starts the next day and ends the day before a completed reconnect. */
+function disconnectWindow(ix, wo, premise) {
+  const disconnectDate = dateOf(wo.completed_at);
+  const reconnect = (ix.wosByPremise[premise || wo.oms_premise_id] || [])
+    .filter(w => w.wo_type === 'RECONNECT' && w.status === 'COMPLETED' && w.completed_at > wo.completed_at)
+    .sort((a, b) => a.completed_at.localeCompare(b.completed_at))[0] || null;
+  return { disconnectDate, start: addDays(disconnectDate, 1),
+           end: reconnect ? addDays(dateOf(reconnect.completed_at), -1) : null, reconnect };
+}
+
+/** Latest integration message for a work order (OMS → CC&B field-activity completion). */
+const integrationMsg = (ix, woId) => (ix.msgsByWo[woId] || []).slice().sort((a, b) => b.received_at.localeCompare(a.received_at))[0] || null;
+/** OPEN CC&B To Do entries raised against the work order or the SA. */
+function openTodos(ix, woId, saId) {
+  const seen = new Set(), out = [];
+  for (const t of [...(ix.todosByEntity[woId] || []), ...(saId ? ix.todosBySa[saId] || [] : [])]) {
+    if (t.status === 'OPEN' && !seen.has(t.todo_id)) { seen.add(t.todo_id); out.push(t); }
+  }
+  return out;
+}
+
+/**
+ * Steps 4–8: compare the post-disconnect window with CC&B bills and MDM reads.
+ * opt.scanStart / opt.scanEnd — scan range; opt.billCutoff — ignore bills run after this timestamp.
+ */
+function analyzeWindow(ix, wo, res, win, opt) {
+  const first = maxStr(win.start, opt.scanStart);
+  const last = win.end ? minStr(win.end, opt.scanEnd) : opt.scanEnd;
+  const reads = ix.readsByMeter[res.xw.mdm_meter_id] || {};
+  // Bills of every SA on this service point; FINAL or DISPUTED only (issued bills).
+  const bills = res.spSas.flatMap(sa => (ix.billsBySa[sa.sa_id] || []).map(b => ({ b, sa })))
+    .filter(({ b }) => (b.bill_status === 'FINAL' || b.bill_status === 'DISPUTED') && (!opt.billCutoff || b.bill_run_at <= opt.billCutoff));
+
+  const per = new Map(), windowReads = [];
+  let unbilledKwh = 0, unbilledDays = 0, unbilledFrom = null, unbilledTo = null;
+  if (first <= last) {
+    for (const d of dayRange(first, last)) {
+      const rd = reads[d];
+      if (rd) windowReads.push(rd);
+      // If several SAs exist, use the bill whose SA dates cover this day.
+      const cands = bills.filter(x => x.b.period_start <= d && d <= x.b.period_end);
+      const hit = cands.find(x => x.sa.start_date <= d && (!x.sa.stop_date || x.sa.stop_date >= d)) || cands[0];
+      if (hit) {
+        let p = per.get(hit.b.bill_id);
+        if (!p) { p = { bill: hit.b, sa: hit.sa, overlapDays: 0, from: d, to: d, phantomKwh: 0, actualKwh: 0 }; per.set(hit.b.bill_id, p); }
+        p.overlapDays++; p.to = d;
+        if (rd && rd._kwh > 0) {
+          if (rd.read_quality === 'ESTIMATED') p.phantomKwh += rd._kwh;   // phantom consumption → credit
+          else p.actualKwh += rd._kwh;                                    // billed actual after disconnect → RV
+        }
+      } else if (rd && rd.read_quality === 'ACTUAL' && rd._kwh > 0) {     // unbilled actual after disconnect → RV
+        unbilledKwh += rd._kwh; unbilledDays++; unbilledFrom ||= d; unbilledTo = d;
+      }
+    }
+  }
+
+  const billLines = [...per.values()].map(p => billCredit(ix, wo, p));
+  const sum = f => money(billLines.reduce((a, l) => a + f(l), 0));
+  const consCredit = sum(l => l.consCredit), fixedCredit = sum(l => l.fixedCredit), fixedRetained = sum(l => l.fixedRetained);
+  const credit = money(consCredit + fixedCredit);
+  const phantomKwh = round1(billLines.reduce((a, l) => a + l.phantomKwh, 0));
+  const billedActualKwh = round1(billLines.reduce((a, l) => a + l.actualKwh, 0));
+  unbilledKwh = round1(unbilledKwh);
+  const affected = billLines.filter(l => l.credit > 0 || l.actualKwh > 0);
+  const isStop = STOP_SUBTYPES.has(wo.wo_subtype), isNonpay = wo.wo_subtype === 'NONPAY';
+
+  // Step 7: rules fired
+  const rules = [];
+  if (billLines.length) rules.push('R1');
+  if (phantomKwh > 0) rules.push('R2');
+  if (isStop && res.sa.sa_status === 'ACTIVE') rules.push('R5');
+  if (res.sa.stop_processed_at && billLines.some(l => l.bill.bill_run_at > wo.completed_at && l.bill.bill_run_at < res.sa.stop_processed_at)) rules.push('RT');
+  if (billedActualKwh + unbilledKwh > 0) rules.push('RV');
+  const flagged = credit > 0 || rules.includes('RV');
+
+  // Step 8: severity
+  let severity = null;
+  if (credit > 0) {
+    if (credit >= 250 || affected.length >= 2 || affected.some(l => l.bill.bill_status === 'DISPUTED')) severity = 'HIGH';
+    else if (credit >= 25) severity = 'MEDIUM';
+    else severity = 'LOW';
+  } else if (rules.includes('RV')) severity = 'REVIEW';
+
+  const msg = integrationMsg(ix, wo.wo_id);
+  const todos = openTodos(ix, wo.wo_id, res.sa.sa_id);
+  const a = {
+    wo, res, sa: res.sa, xw: res.xw, account: res.account, meter: res.meter, win, isStop, isNonpay, first, last,
+    billLines, consCredit, fixedCredit, fixedRetained, credit, phantomKwh, billedActualKwh, unbilledKwh, unbilledDays,
+    unbilledFrom, unbilledTo, postDays: billLines.reduce((s, l) => s + l.overlapDays, 0) + unbilledDays,
+    billsAffected: affected.length, rules, severity, flagged, msg, todos, readSummary: summarizeReads(windowReads),
+  };
+  a.causes = flagged ? probableCauses(a) : [];
+  return a;
+}
+
+function summarizeReads(list) {
+  if (!list.length) return null;
+  const est = list.filter(r => r.read_quality === 'ESTIMATED'), act = list.filter(r => r.read_quality === 'ACTUAL');
+  return { first: list[0], last: list[list.length - 1], count: list.length,
+    estCount: est.length, estKwh: round1(est.reduce((s, r) => s + r._kwh, 0)),
+    actCount: act.length, actKwh: round1(act.reduce((s, r) => s + r._kwh, 0)),
+    vee: [...new Set(est.map(r => r.vee_rule).filter(Boolean))] };
+}
+
+/** Step 9: probable cause from the integration log for the work order plus the CC&B To Do queue. */
+function probableCauses(a) {
+  const out = [], m = a.msg;
+  const todoNote = a.todos.length ? a.todos.map(t => `To Do ${t.todo_id} ${t.status}${t.assigned_to ? `, assigned to ${t.assigned_to}` : ', unassigned'}`).join('; ') : 'no open To Do';
+  if (a.isNonpay) {
+    out.push({ code: 'C4 + C5', label: 'C4 + C5 — non-pay keeps SA active by design; MDM estimated while disconnected' });
+  } else if (m && m.status === 'SKIPPED') {
+    out.push({ code: 'C1', label: `C1 — no integration mapping (${m.error_message || 'message skipped'})` });
+  } else if (m && m.status === 'ERROR' && /cross[\s-]?ref/i.test(m.error_message)) {
+    out.push({ code: 'C3', label: `C3 — ID mismatch (${m.error_message})` });
+  } else if (m && m.status === 'ERROR') {
+    out.push({ code: 'C2', label: `C2 — integration failure (${m.error_message || 'error'}); ${todoNote}` });
+  } else if (m && m.status === 'SUCCESS' && m.processed_at && a.billLines.some(l => m.processed_at > l.bill.bill_run_at)) {
+    const l = a.billLines.find(x => m.processed_at > x.bill.bill_run_at);
+    out.push({ code: 'C6', label: `C6 — bill ran before stop was processed (bill run ${l.bill.bill_run_at}, stop processed ${m.processed_at})` });
+  } else if (!m && a.isStop && a.credit > 0) {
+    out.push({ code: 'NOMSG', label: 'No integration message found for this work order' });
+  }
+  if (a.rules.includes('RV') && !out.length) out.push({ code: 'TAMPER', label: 'Possible failed disconnect or tamper — dispatch field check' });
+  if (!out.length) out.push({ code: 'OTHER', label: 'Unclassified — manual review' });
+  return out;
+}
+
+/* =========================================================================
+   SECTION 4 — CREDIT CALCULATION
+   ========================================================================= */
+/**
+ * Step 6, per bill:
+ *  consumption credit = round(phantom kWh × tariff rate_per_kwh, 2)
+ *  fixed credit       = round(overlapping billed days × fixed_daily_charge, 2) for STOP_SERVICE / MOVE_OUT when the
+ *                       tariff says fixed charges stop on stop-service (Y);
+ *  NONPAY with fixed_continues_on_nonpay = Y → fixed amount shown as "retained per tariff", not credited.
+ */
+function billCredit(ix, wo, p) {
+  const t = ix.tariff[p.sa.tariff_code];
+  const rate = t ? num(t.rate_per_kwh) : num(p.bill.rate_per_kwh);           // fall back to the bill's own rate
+  const fixedDaily = t ? num(t.fixed_daily_charge) : num(p.bill.fixed_daily_charge);
+  let creditFixed;
+  if (STOP_SUBTYPES.has(wo.wo_subtype)) creditFixed = !t || t.fixed_stops_on_stop_service === 'Y';
+  else if (wo.wo_subtype === 'NONPAY') creditFixed = !!t && t.fixed_continues_on_nonpay !== 'Y';
+  else creditFixed = !t || t.fixed_stops_on_stop_service === 'Y';          // other subtypes behave like a stop
+  const phantomKwh = round1(p.phantomKwh);
+  const consCredit = money(phantomKwh * rate);
+  const fixedAmt = money(p.overlapDays * fixedDaily);
+  const fixedCredit = creditFixed ? fixedAmt : 0;
+  return { ...p, tariff: t, rate, fixedDaily, phantomKwh, actualKwh: round1(p.actualKwh), consCredit, fixedAmt, fixedCredit,
+           fixedRetained: creditFixed ? 0 : fixedAmt, credit: money(consCredit + fixedCredit) };
+}
+
+/** Plain-English recommended action for a back-scan finding. */
+function recommendAction(a) {
+  const s = [], has = r => a.rules.includes(r), code = a.causes[0] && a.causes[0].code;
+  const n = a.billLines.filter(l => l.credit > 0).length;
+  if (has('R5')) s.push(`place bill hold on ${a.sa.sa_id} and process the stop effective ${a.win.disconnectDate}`);
+  if (has('RT')) {
+    const ids = a.billLines.filter(l => l.bill.bill_run_at < a.sa.stop_processed_at).map(l => l.bill.bill_id).join(', ');
+    s.push(`cancel and rebill ${ids} as a final bill ending ${a.win.disconnectDate}`);
+  }
+  if (a.credit > 0) {
+    if (!a.isNonpay) s.push(`credit ${fmtMoney(a.credit)} (${plural(n, 'bill')})`);
+    else s.push(`credit ${fmtMoney(a.credit)} of estimated consumption; fixed charges ${fmtMoney(a.fixedRetained)} retained per tariff`);
+  }
+  if (a.isNonpay && has('R2')) s.push('suppress MDM estimation while a non-pay disconnect is active');
+  if (code === 'C1') s.push(`add a CC&B mapping for wo_subtype ${a.wo.wo_subtype}`);
+  if (code === 'C2' && a.todos.length) s.push(`assign and work ${a.todos.map(t => t.todo_id).join(', ')}`);
+  if (code === 'C6') s.push('review the bill-run cut-off against the stop-processing queue');
+  const disputed = a.billLines.find(l => l.bill.bill_status === 'DISPUTED');
+  if (disputed) s.push(`resolve the open dispute on ${disputed.bill.bill_id}`);
+  if (has('RV')) s.push(`dispatch a field check to confirm the disconnect and inspect for tamper — ${fmtKwh(a.billedActualKwh + a.unbilledKwh)} kWh of actual consumption recorded ${a.unbilledFrom ? `${a.unbilledFrom} to ${a.unbilledTo}` : 'after the disconnect'}${a.credit > 0 ? '' : '; no credit due'}`);
+  if (a.severity === 'HIGH') s.push('route to escalation DRI');
+  const txt = s.join('; ') || 'Review manually';
+  return txt.charAt(0).toUpperCase() + txt.slice(1) + '.';
+}
+
+/** Step 2 (unresolved): near-match suggestions and "potential exposure if linked". */
+function buildUnmatched(ix, wo, reason, scan) {
+  const recorded = wo.oms_premise_id;
+  const folded = foldLookalikes(recorded);
+  const suggestions = Object.keys(ix.xwByPremise)
+    .map(p => ({ premise: p, distance: levenshtein(foldLookalikes(p), folded), raw: levenshtein(p, recorded) }))
+    .filter(c => c.distance <= 1)
+    .sort((a, b) => a.distance - b.distance || a.raw - b.raw || a.premise.localeCompare(b.premise))
+    .map(c => ({ ...c, note: diffNote(recorded, c.premise) }));
+  const um = { wo, recorded, reason, suggestions, suggestion: suggestions[0] || null, exposure: null, msg: integrationMsg(ix, wo.wo_id) };
+  if (um.suggestion) {
+    const res = resolvePremise(ix, um.suggestion.premise, dateOf(wo.completed_at));
+    if (res.ok) {
+      const a = analyzeWindow(ix, wo, res, disconnectWindow(ix, wo, um.suggestion.premise), scan);
+      a.causes = [{ code: 'C3', label: `C3 — ID mismatch${um.msg && um.msg.error_message ? ` (${um.msg.error_message})` : ''}` }];
+      um.exposure = { a, consCredit: a.consCredit, fixedCredit: a.fixedCredit, total: a.credit };
+    }
+  }
+  return um;
+}
+function diffNote(a, b) {
+  let txt = `${levenshtein(a, b)}-character difference`;
+  if (a.length === b.length) {
+    const pos = [];
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) pos.push(`'${a[i]}' vs '${b[i]}' at position ${i + 1}`);
+    if (pos.length) txt += ': ' + pos.join(', ');
+  }
+  if (foldLookalikes(a) === foldLookalikes(b)) txt += ' (look-alike characters)';
+  return txt;
+}
+
+const defaultScanRange = ix => ({ scanStart: ix.minBill, scanEnd: ix.maxBill });
+
+/** Main entry: back-scan over the scan range and daily check as of opts.asOf. */
+function detect(ix, opts) {
+  const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const t0 = now();
+  const asOf = opts.asOf, asOfEnd = asOf + ' 23:59';
+  const scan = { scanStart: opts.scanStart || ix.minBill, scanEnd: opts.scanEnd || ix.maxBill };
+  const wos = Object.values(ix.wosByPremise).flat();
+
+  // Step 1: completed DISCONNECT work orders only.
+  const completed = wos.filter(w => w.wo_type === 'DISCONNECT' && w.status === 'COMPLETED' && w.completed_at)
+    .sort((a, b) => a.completed_at.localeCompare(b.completed_at));
+  const back = { findings: [], unmatched: [], scanned: completed.length, matched: 0, ...scan };
+  const daily = { asOf, holds: [], unmatched: [], excluded: [], scanned: 0, matched: 0, nextRun: nextBillRun(ix, asOf) };
+
+  for (const wo of completed) {
+    const dDate = dateOf(wo.completed_at);
+    const inDaily = wo.completed_at <= asOfEnd;
+    if (inDaily) daily.scanned++;
+    const res = resolvePremise(ix, wo.oms_premise_id, dDate);
+    if (!res.ok) {
+      const um = buildUnmatched(ix, wo, res.reason, scan);
+      back.unmatched.push(um);
+      if (inDaily) daily.unmatched.push(um);
+      continue;
+    }
+    back.matched++; if (inDaily) daily.matched++;
+    const win = disconnectWindow(ix, wo);
+
+    // ---- Back-scan ----
+    const a = analyzeWindow(ix, wo, res, win, scan);
+    if (a.flagged) back.findings.push(makeFinding(a));
+
+    // ---- Daily check: STOP_SERVICE / MOVE_OUT (not NONPAY) whose SA is still active at the end of D ----
+    if (!inDaily) continue;
+    const common = { key: wo.wo_id, wo, sa: res.sa, accountId: res.sa.account_id, saId: res.sa.sa_id,
+      customer: res.account ? res.account.customer_name : res.sa.account_id, cls: res.account ? res.account.customer_class : '',
+      tariff: res.sa.tariff_code, disconnectDate: dDate, daysSince: daysBetween(dDate, asOf) };
+    if (wo.wo_subtype === 'NONPAY') { daily.excluded.push(common); continue; }
+    const stillActive = res.sa.sa_status === 'ACTIVE' || (res.sa.stop_processed_at && res.sa.stop_processed_at > asOfEnd);
+    if (!stillActive) continue;
+    const toDate = analyzeWindow(ix, wo, res, win, { scanStart: scan.scanStart, scanEnd: minStr(asOf, scan.scanEnd), billCutoff: asOfEnd });
+    const msg = integrationMsg(ix, wo.wo_id), todos = openTodos(ix, wo.wo_id, res.sa.sa_id);
+    const saNote = res.sa.sa_status === 'ACTIVE' ? 'ACTIVE' : `ACTIVE as of ${asOf} (stop processed ${res.sa.stop_processed_at})`;
+    daily.holds.push({ ...common, a: toDate, msg, todos, saNote, creditToDate: toDate.credit, nextRun: daily.nextRun,
+      action: `Hold before next bill run${daily.nextRun ? ` (${daily.nextRun})` : ''}: place bill hold on ${res.sa.sa_id} and process the stop effective ${dDate}` +
+        (todos.length ? `; work ${todos.map(t => t.todo_id).join(', ')}` : '') +
+        (toDate.credit > 0 ? `; ${fmtMoney(toDate.credit)} already billed for post-disconnect days needs crediting` : '') + '.' });
+  }
+  back.totalCredit = money(back.findings.reduce((s, f) => s + f.credit, 0));
+  return { back, daily, asOf, scan, elapsedMs: now() - t0 };
+}
+
+function makeFinding(a) {
+  return {
+    key: a.wo.wo_id, accountId: a.sa.account_id, saId: a.sa.sa_id,
+    customer: a.account ? a.account.customer_name : a.sa.account_id, cls: a.account ? a.account.customer_class : '',
+    tariff: a.sa.tariff_code, severity: a.severity, billsAffected: a.billsAffected, postDays: a.postDays,
+    phantomKwh: a.phantomKwh, actualAfterKwh: round1(a.unbilledKwh + a.billedActualKwh), credit: a.credit,
+    causes: a.causes, cause: a.causes.map(c => c.label).join('; '), causeCodes: a.causes.map(c => c.code),
+    rules: a.rules, action: recommendAction(a), a,
+  };
+}
+
+/* =========================================================================
+   SECTION 5 — SELF-TEST against answer_key.csv
+   ========================================================================= */
+const MONEY_TOL = 0.01 + 1e-9;
+/** The answer key's daily column name carries its as-of date, e.g. daily_check_2026_11_02. */
+function answerKeyAsOf(headers) {
+  const h = (headers || []).find(x => /^daily_check_\d{4}_\d{2}_\d{2}$/.test(x));
+  return h ? { col: h, asOf: h.slice(12).replace(/_/g, '-') } : null;
+}
+/** Case codes (E1…, N1…) by account_id, matched on customer_name. */
+function caseLabels(files) {
+  const out = {};
+  const key = files['answer_key.csv'], accts = files['ccb_accounts.csv'];
+  if (!key || !accts) return out;
+  const byName = {};
+  for (const a of accts.rows) (byName[a.customer_name.trim().toLowerCase()] ||= []).push(a.account_id);
+  for (const r of key.rows) for (const id of byName[r.customer_name.trim().toLowerCase()] || []) out[id] = r.case;
+  return out;
+}
+
+function runSelfTest(d) {
+  const key = d.files['answer_key.csv'];
+  if (!key) return { available: false, reason: 'answer_key.csv not present in this dataset' };
+  const ak = answerKeyAsOf(key.headers);
+  if (!ak) return { available: false, reason: 'answer_key.csv has no daily_check_YYYY_MM_DD column' };
+  const ix = d.ix, r = detect(ix, { asOf: ak.asOf, ...defaultScanRange(ix) });
+  const byName = {};
+  for (const a of d.files['ccb_accounts.csv'].rows) (byName[a.customer_name.trim().toLowerCase()] ||= []).push(a.account_id);
+  const listed = new Set();
+  const findingFor = ids => r.back.findings.find(f => ids.includes(f.accountId));
+  const unmatchedFor = (list, ids) => list.find(u => u.exposure && ids.includes(u.exposure.a.sa.account_id));
+  const backRows = [], dailyRows = [];
+
+  for (const k of key.rows) {
+    const ids = byName[k.customer_name.trim().toLowerCase()] || [];
+    ids.forEach(id => listed.add(id));
+    const f = findingFor(ids), u = unmatchedFor(r.back.unmatched, ids);
+    const total = num(k.credit_total);
+    const actualBack = f ? `FINDING · ${f.severity} · ${fmtMoney(f.credit)}` : u ? `UNMATCHED · potential ${fmtMoney(u.exposure.total)}` : 'not flagged';
+    let expected, pass;
+    switch (k.back_scan_result) {
+      case 'FINDING':
+        expected = `FINDING · ${k.severity} · ${fmtMoney(total)}`;
+        pass = !!f && f.severity === k.severity && Math.abs(f.credit - total) <= MONEY_TOL; break;
+      case 'UNMATCHED':
+        expected = `UNMATCHED · potential ${fmtMoney(total)}`;
+        pass = !!u && !f && Math.abs(u.exposure.total - total) <= MONEY_TOL; break;
+      case 'DAILY_CHECK_ONLY': expected = 'not a finding (daily check only)'; pass = !f; break;
+      default: expected = 'not a finding'; pass = !f; break;
+    }
+    if (!ids.length) pass = false;
+    backRows.push({ code: k.case, name: k.customer_name, expected, actual: ids.length ? actualBack : 'customer not found in ccb_accounts.csv', pass });
+
+    const hold = r.daily.holds.find(h => ids.includes(h.accountId)), du = unmatchedFor(r.daily.unmatched, ids);
+    const exp = k[ak.col];
+    const act = hold ? 'HOLD' : du ? 'UNMATCHED' : 'NONE';
+    dailyRows.push({ code: k.case, name: k.customer_name, expected: exp, actual: ids.length ? act : 'customer not found', pass: !!ids.length && act === exp });
+  }
+  // Anything flagged that the answer key doesn't list is a failure.
+  const extraF = r.back.findings.filter(f => !listed.has(f.accountId));
+  backRows.push({ code: '—', name: 'Accounts not in answer key', expected: 'none flagged',
+    actual: extraF.length ? extraF.map(f => `${f.customer} (${f.severity})`).join(', ') : 'none flagged', pass: !extraF.length });
+  const extraU = r.back.unmatched.filter(u => !(u.exposure && listed.has(u.exposure.a.sa.account_id)));
+  if (extraU.length) backRows.push({ code: '—', name: 'Unmatched not in answer key', expected: 'none', actual: extraU.map(u => u.wo.wo_id).join(', '), pass: false });
+  const extraH = r.daily.holds.filter(h => !listed.has(h.accountId));
+  dailyRows.push({ code: '—', name: 'Accounts not in answer key', expected: 'none held',
+    actual: extraH.length ? extraH.map(h => h.customer).join(', ') : 'none held', pass: !extraH.length });
+  const totalExpected = money(key.rows.filter(k => k.back_scan_result === 'FINDING').reduce((s, k) => s + num(k.credit_total), 0));
+  backRows.push({ code: '∑', name: 'Total credit owed', expected: fmtMoney(totalExpected), actual: fmtMoney(r.back.totalCredit), pass: Math.abs(totalExpected - r.back.totalCredit) <= MONEY_TOL });
+
+  return { available: true, asOf: ak.asOf, scan: defaultScanRange(ix),
+    backscan: { rows: backRows, pass: backRows.every(x => x.pass) }, daily: { rows: dailyRows, pass: dailyRows.every(x => x.pass) } };
+}
+
+/** Turn a dataset's raw files into a ready-to-use model (index, labels, validation). */
+function prepareDataset(meta, files) {
+  const v = validateFiles(files);
+  const d = { ...meta, files, errors: v.errors, warnings: v.warnings };
+  d.fileCount = Object.keys(files).length;
+  d.rowCount = Object.values(files).reduce((s, f) => s + f.rows.length, 0);
+  if (!v.errors.length) { d.ix = buildIndex(files); d.labels = caseLabels(files); d.selfTest = runSelfTest(d); }
+  return d;
+}
+
+/* === ENGINE END === */
+
+/* =========================================================================
+   SECTION 2b — LOADING: local server API (with the signed-in user), or a folder chosen in the browser
+   ========================================================================= */
+const DISPLAY_NAMES = { dataset_A_with_errors: 'Dataset A — with errors', dataset_B_two_errors_corrected: 'Dataset B — 2 errors corrected' };
+const source = { mode: null, list: [], localFiles: {}, cache: new Map() };
+
+/** Fetch + parse every allowed file for one dataset (cached in memory; no browser storage). */
+async function loadDataset(meta) {
+  if (source.cache.has(meta.id)) return source.cache.get(meta.id);
+  const files = {};
+  const names = FILE_NAMES.filter(n => meta.present.includes(n));
+  await Promise.all(names.map(async name => {
+    let text;
+    if (source.mode === 'api') {
+      const r = await fetch(`/api/datasets/${encodeURIComponent(meta.id)}/files/${encodeURIComponent(name)}`, { cache: 'no-store', headers: hdrs() });
+      if (!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
+      text = await r.text();
+    } else text = await source.localFiles[meta.id][name].text();
+    files[name] = parseCSV(text);
+  }));
+  const d = prepareDataset(meta, files);
+  source.cache.set(meta.id, d);
+  return d;
+}
+/** Fallback: discover datasets from a folder picked with <input webkitdirectory>. */
+function discoverLocal(fileList) {
+  const byDir = {};
+  for (const f of fileList) {
+    const parts = (f.webkitRelativePath || f.name).split('/');
+    const name = parts.pop();
+    if (!FILE_NAMES.includes(name) || parts.length > 3) continue;
+    (byDir[parts.join('/')] ||= {})[name] = f;
+  }
+  source.localFiles = {};
+  const list = [];
+  for (const [dir, files] of Object.entries(byDir).sort()) {
+    if (!files['ccb_bill_segments.csv']) continue;
+    const folderName = dir.split('/').pop();
+    const id = 'local__' + dir.replace(/[^A-Za-z0-9_.-]/g, '_');
+    source.localFiles[id] = files;
+    list.push({ id, name: DISPLAY_NAMES[folderName] || folderName, folder: dir + ' (chosen in browser)', present: FILE_NAMES.filter(n => files[n]), missing: FILE_NAMES.filter(n => !files[n]), scenarios: [] });
+  }
+  return list;
+}
+
+/* =========================================================================
+   SECTION 6 — UI: app shell, sign-in, roles, screens
+   ========================================================================= */
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const MODE_LABEL = { backscan: 'Back-scan', daily: 'Daily check' };
+const DEFAULT_ASOF = '2026-11-02';
+const ROLE_LABEL = { BILLING_OPS: 'Billing Ops', DRI: 'DRI', FIELD_OPS: 'Field Ops', MASTER_DATA: 'Master Data', INTEGRATION: 'Integration', FINANCE: 'Finance', REGULATORY: 'Regulatory', AUDITOR: 'Auditor' };
+const CASE_STATES = ['DETECTED', 'INVESTIGATED', 'MASTER_DATA_REVIEW', 'DRI_DECISION', 'FIELD_VERIFICATION', 'FINANCE_APPROVAL', 'PLAN_APPROVAL', 'EXECUTING', 'VERIFYING', 'REGULATORY_REVIEW', 'READY_TO_RELEASE', 'RESOLVED'];
+const AGENT_STATES = ['DETECTED', 'INVESTIGATED', 'EXECUTING', 'VERIFYING'];
+const NAV = [
+  ['Overview', ['dashboard', 'mywork']],
+  ['Pre-bill guard', ['billrun', 'cases']],
+  ['POC 1 detector', ['backscan']],
+  ['Role queues', ['masterdata', 'field', 'finance', 'regulatory', 'integration']],
+  ['Data & assurance', ['explorer', 'audit', 'selftest']],
+];
+// POC 1 state (back-scan / daily check / explorer / POC 1 self-test)
+const state = {
+  dsId: null, mode: 'backscan', asOf: DEFAULT_ASOF, scan: null, scanTouched: false, labels: false, theme: 'auto',
+  sevFilter: 'ALL', causeFilter: 'ALL', sort: { key: 'severity', dir: -1 }, result: null, running: false, banner: null,
+  detail: null, explorer: { file: 'oms_work_orders.csv', q: '', page: 0, mode: 'base' }, stPick: null,
+};
+// App state (roles, workflow)
+const S = { users: [], agent: null, me: null, perms: {}, labels: {}, demoTools: false, datasets: [], dsId: null, scId: null,
+  route: { screen: 'dashboard', id: null }, offline: false, work: [], last: {}, feed: 'all', auditF: {}, serverTest: null, testing: false,
+  sandbox: null, pollTimer: null, busy: false };
+
+const hdrs = () => ({ 'X-User-Id': S.me ? S.me.user_id : '', 'X-Dataset-Id': S.dsId || '', 'X-Scenario-Id': S.scId || '' });
+async function api(path, opt = {}) {
+  const r = await fetch(path, { method: opt.method || 'GET', cache: 'no-store',
+    headers: Object.assign(hdrs(), opt.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    body: opt.body !== undefined ? JSON.stringify(opt.body) : undefined });
+  if (opt.raw) { if (!r.ok) throw new Error((await r.text()) || 'HTTP ' + r.status); return r.text(); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || 'HTTP ' + r.status); e.status = r.status; throw e; }
+  return j;
+}
+let toastTimer = null;
+function toast(msg, err) {
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, err ? 6000 : 3000);
+}
+const can = screen => !!S.perms[screen] && S.perms[screen] !== '-';
+const lvl = screen => S.perms[screen] || '-';
+const initials = n => n.split(/\s+/).map(x => x[0]).join('').slice(0, 2).toUpperCase();
+const cur = () => source.cache.get(state.dsId);
+const caseCode = acct => { const ds = S.datasets.find(x => x.id === S.dsId); if (ds && ds.case_codes && ds.case_codes[acct]) return ds.case_codes[acct]; const d = cur(); return d && d.labels ? d.labels[acct] : null; };
+const tagFor = accountId => { const code = state.labels ? caseCode(accountId) : null; return code ? `<span class="case-tag${code[0] === 'N' ? ' n' : ''}">${esc(code)}</span>` : ''; };
+const sevBadge = s => `<span class="badge sev-${esc(s)}">${esc(s)}</span>`;
+const stBadge = m => m ? `<span class="badge st-${esc(m.status)}">${esc(m.status)}</span>` : '<span class="badge st-NONE">NO MESSAGE</span>';
+const ruleChips = rs => rs.map(r => `<span class="rule" title="${esc(RULES[r] || r)}">${r}</span>`).join('');
+const typeBadge = t => `<span class="type-badge t-${esc(t)}">${esc(t === 'REVENUE_PROTECTION' ? 'REV. PROTECTION' : t)}</span>`;
+const stateBadge = s => { const cls = s === 'RESOLVED' ? 's-done' : s === 'CLOSED_NO_ACTION' ? 's-closed' : s === 'RETURNED_TO_DRI' ? 's-ret' : AGENT_STATES.includes(s) ? 's-agent' : 's-wait';
+  return `<span class="state-badge ${cls}">${esc(s.replace(/_/g, ' '))}</span>`; };
+const outcomeBadge = o => `<span class="badge o-${esc(o)}">${esc(o.replace('_', '-'))}</span>`;
+const fmtAge = s => s == null ? '' : s < 60 ? s + 's' : s < 3600 ? Math.round(s / 60) + 'm' : Math.round(s / 3600) + 'h';
+const fmtLocal = ts => ts ? ts.replace('T', ' ').slice(0, 19) : '';
+const gateTags = gs => (gs || []).map(g => `<span class="rule" title="${esc({ G1: 'Bill covers post-disconnect days', G2: 'Estimated reads post-disconnect', G3: 'SA active despite stop', G4: 'Integration message failed / unprocessed', G5: 'ID near-match (unmatched disconnect)', G6: 'Actual consumption after disconnect' }[g] || g)}">${g}</span>`).join('');
+const curDs = () => S.datasets.find(d => d.id === S.dsId);
+const curSc = () => (curDs() || { scenarios: [] }).scenarios.find(s => s.scenario_id === S.scId);
+
+/* ---------- Boot, sign-in ---------- */
+async function boot() {
+  applyTheme();
+  try {
+    const r = await fetch('/api/users', { cache: 'no-store' });
+    if (!r.ok) throw new Error('/api/users returned ' + r.status);
+    const j = await r.json();
+    S.users = j.users; S.agent = j.agent;
+  } catch (e) { S.offline = true; showOffline(e); return; }
+  const m = location.hash.match(/[?&]u=([\w.]+)/);
+  if (m && S.users.some(u => u.user_id === m[1])) signIn(m[1]); else showSignIn();
+}
+const ROLE_CAN = {
+  BILLING_OPS: 'Runs the pre-bill gate, releases bills, sends back-scan findings to the workflow.',
+  DRI: 'Decides the option for each case and approves execution plans.',
+  FIELD_OPS: 'Records field verification outcomes.', MASTER_DATA: 'Confirms or rejects suggested premise matches.',
+  INTEGRATION: 'Acknowledges and fixes integration error signatures.', FINANCE: 'Approves credits and large reductions.',
+  REGULATORY: 'Reviews and edits customer letters and regulator responses.', AUDITOR: 'Read-only; exports and verifies the audit log.' };
+function showSignIn() {
+  stopPolling();
+  $('#shell').hidden = true; $('#hdrControls').hidden = true; $('#sourceBar').hidden = true;
+  $('#agentBadge').hidden = !S.agent; if (S.agent) $('#agentBadge').textContent = S.agent.label;
+  $('#stage').hidden = false;
+  $('#stage').innerHTML = `<div class="signin"><h2>Sign in</h2>
+    <p class="muted">Simulated sign-in (no passwords). Each user sees only the screens and work items for their role; the server enforces the same permissions.</p>
+    <div class="user-grid">${S.users.map(u => `<button class="user-card" data-signin="${esc(u.user_id)}" type="button">
+      <div class="uc-top"><span class="avatar">${esc(initials(u.name))}</span><div><div class="uc-name">${esc(u.name)}</div><div class="uc-role">${esc(u.title)}</div></div></div>
+      <span class="pill">${esc(u.role)}</span><div class="uc-can">${esc(ROLE_CAN[u.role] || '')}</div></button>`).join('')}</div>
+    <p class="note" style="margin-top:18px">All data is fictional. The agents are a deterministic mock (no network, no API key). Source CSVs are read-only; corrections go to a sandbox.</p></div>`;
+}
+async function signIn(uid) {
+  const prev = S.me && S.me.user_id;
+  S.me = S.users.find(u => u.user_id === uid);
+  try {
+    if (!S.datasets.length) {
+      S.datasets = await api('/api/datasets');
+      source.mode = 'api';
+      source.list = S.datasets.map(d => ({ id: d.id, name: d.name, folder: d.folder, dataDir: d.data_dir, present: d.files_present, missing: d.files_missing, scenarios: d.scenarios }));
+      const dA = S.datasets.find(d => /dataset_A/i.test(d.folder)) || S.datasets[0];
+      S.dsId = dA ? dA.id : null;
+      const replays = dA ? dA.scenarios.filter(s => s.kind === 'REPLAY') : [];
+      S.scId = (replays.find(s => s.scenario_id === 'RUN_2026-11-02') || replays[replays.length - 1] || (dA && dA.scenarios[0]) || {}).scenario_id;
+      state.dsId = S.dsId;
+    }
+    await api('/api/session/sign_in', { method: 'POST', body: { user_id: uid, previous_user_id: prev || null } });
+    const me = await api('/api/me');
+    S.me = me.user; S.perms = me.permissions; S.labels = me.screens; S.demoTools = me.demo_tools;
+  } catch (e) { toast('Sign-in failed: ' + e.message, true); return; }
+  if (!S.datasets.length) { $('#stage').innerHTML = `<div class="panel error"><h2>No datasets found</h2><p>The server found no folder containing ccb_bill_segments.csv. Add dataset folders and reload.</p></div>`; return; }
+  $('#stage').hidden = true; $('#shell').hidden = false; $('#hdrControls').hidden = false;
+  renderHeader();
+  // A switched user starts on the dashboard (never on the previous user's page); a fresh sign-in may deep-link.
+  const want = prev ? ['dashboard'] : (location.hash.replace(/^#\/?/, '').split('?')[0] || '').split('/');
+  const screen = want[0] && (can(want[0]) || (want[0] === 'case' && can('case_detail'))) ? want[0] : 'dashboard';
+  S.last = {}; S.work = [];
+  go(screen, want[1] || null, true);
+  startPolling();
+}
+
+/* ---------- Header, navigation, routing ---------- */
+function renderHeader() {
+  const ds = curDs();
+  $('#agentBadge').hidden = false; $('#agentBadge').textContent = S.agent ? S.agent.label : 'Agent: mock (scripted)';
+  $('#dsSelect').innerHTML = S.datasets.map(d => `<option value="${esc(d.id)}"${d.id === S.dsId ? ' selected' : ''}>${esc(d.name)}</option>`).join('');
+  $('#scSelect').innerHTML = (ds ? ds.scenarios : []).map(s => `<option value="${esc(s.scenario_id)}"${s.scenario_id === S.scId ? ' selected' : ''}>${esc(s.scenario_id)} — ${esc(s.label)}</option>`).join('');
+  $('#userChip').innerHTML = `<span class="avatar">${esc(initials(S.me.name))}</span><span class="who">${esc(S.me.name)}<small>${esc(S.me.title)} · ${esc(S.me.role)}</small></span>
+    <button class="btn ghost sm" data-action="switch-user" type="button">Switch user</button>`;
+  $('#workBtn').hidden = !can('mywork');
+  renderSourceLine();
+  $('#themeBtn').textContent = 'Theme: ' + { auto: 'Auto', light: 'Light', dark: 'Dark' }[state.theme];
+}
+function renderSourceLine() {
+  const ds = curDs(), d = cur(), el = $('#sourceLine');
+  if (!ds) { $('#sourceBar').hidden = true; return; }
+  $('#sourceBar').hidden = false;
+  el.title = ds.folder;
+  el.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/></svg>
+    <span class="path">${esc(ds.folder)}</span><b>${(ds.files_present || ds.present || []).length} files</b>${d ? `<span class="num">${d.rowCount.toLocaleString()} rows</span>` : ''}
+    <span>· scenario <b>${esc(S.scId || '—')}</b>${curSc() ? ` (time ${esc(curSc().scenario_time)})` : ''}</span><span>· source CSVs read-only</span>`;
+}
+function renderNav() {
+  const w = S.work.length;
+  $('#nav').innerHTML = NAV.map(([grp, items]) => {
+    const vis = items.filter(can);
+    if (!vis.length) return '';
+    return `<div class="grp">${esc(grp)}</div>` + vis.map(s => {
+      const on = S.route.screen === s || (S.route.screen === 'case' && s === 'cases');
+      const l = lvl(s);
+      const badge = s === 'mywork' && w ? `<span class="cnt">${w}</span>` : `<span class="lvl" title="${l === 'A' ? 'Can act' : l === 'X' ? 'View, export, verify' : 'View only'}">${l === 'A' ? 'act' : l === 'X' ? 'audit' : 'view'}</span>`;
+      return `<a href="#/${s}" class="${on ? 'on' : ''}" data-nav="${s}">${esc(S.labels[s] || s)}${badge}</a>`;
+    }).join('');
+  }).join('');
+}
+function go(screen, id, replace) {
+  const h = `#/${screen}${id ? '/' + encodeURIComponent(id) : ''}`;
+  if (replace) history.replaceState(null, '', h); else if (location.hash !== h) { location.hash = h; return; }
+  route();
+}
+window.addEventListener('hashchange', () => { if (S.me) route(); });
+async function route(silent) {
+  const parts = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
+  const screen = parts[0] || 'dashboard', id = parts[1] ? decodeURIComponent(parts[1]) : null;
+  S.route = { screen, id };
+  state.detail = null; renderDrawer();
+  renderNav();
+  const def = SCREENS[screen];
+  const allowed = screen === 'case' ? can('case_detail') : can(screen);
+  if (!def || !allowed) { $('#view').innerHTML = `<div class="panel"><h2>Not available</h2><p>${esc(S.me.role)} does not have access to this screen.</p></div>`; return; }
+  if (!silent) $('#view').innerHTML = `<div class="loading"><span class="spinner"></span> Loading…</div>`;
+  const token = S.routeSeq = (S.routeSeq || 0) + 1;
+  try {
+    const data = def.load ? await def.load(id, !silent) : null;
+    if (token !== S.routeSeq) return;              // a newer navigation superseded this one
+    S.last[screen + (id || '')] = JSON.stringify(data);
+    $('#view').innerHTML = def.render(data, id);
+    if (def.after) def.after(data, id);
+  } catch (e) {
+    if (token !== S.routeSeq) return;
+    $('#view').innerHTML = `<div class="panel error"><h2>${e.status === 403 ? 'Permission denied' : 'Could not load'}</h2><p>${esc(e.message)}</p></div>`;
+  }
+}
+/** Live refresh: re-render only when the data changed and the user is not editing a form. */
+function editing() {
+  const v = $('#view');
+  return [...v.querySelectorAll('[data-dirty="1"]')].length > 0 || (v.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+}
+async function refresh() {
+  if (!S.me || S.busy || document.hidden) return;
+  const who = S.me.user_id, ctx = S.dsId + '|' + S.scId;
+  const stale = () => !S.me || S.me.user_id !== who || S.dsId + '|' + S.scId !== ctx;   // user / scenario switched mid-request
+  try {
+    const w = can('mywork') ? (await api('/api/mywork')).items : [];
+    if (stale()) return;
+    if (JSON.stringify(w) !== JSON.stringify(S.work)) { S.work = w; renderNav(); }
+    $('#workCount').textContent = w.length;
+  } catch (e) { /* ignore transient */ }
+  const def = SCREENS[S.route.screen];
+  if (!def || !def.live) return;
+  try {
+    const key = S.route.screen + (S.route.id || ''), token = S.routeSeq;
+    const data = await def.load(S.route.id, false);
+    if (stale() || token !== S.routeSeq || key !== S.route.screen + (S.route.id || '')) return;
+    const js = JSON.stringify(data);
+    if (js === S.last[key]) return;
+    S.last[key] = js;
+    if (editing()) { if (def.partial) def.partial(data, S.route.id); return; }
+    const y = window.scrollY;
+    $('#view').innerHTML = def.render(data, S.route.id);
+    if (def.after) def.after(data, S.route.id);
+    window.scrollTo(0, y);
+  } catch (e) { /* ignore transient */ }
+}
+function startPolling() { stopPolling(); S.pollTimer = setInterval(refresh, 1200); refresh(); }
+function stopPolling() { clearInterval(S.pollTimer); S.pollTimer = null; }
+async function switchContext(kind, value) {
+  const prev = kind === 'dataset' ? S.dsId : S.scId;
+  if (kind === 'dataset') {
+    S.dsId = value; state.dsId = value;
+    const ds = curDs();
+    if (!ds.scenarios.some(s => s.scenario_id === S.scId)) S.scId = (ds.scenarios.find(s => s.kind === 'REPLAY') || ds.scenarios[0]).scenario_id;
+    state.detail = null;
+  } else S.scId = value;
+  try { await api('/api/context', { method: 'POST', body: { changed: kind, previous: prev } }); } catch (e) { /* logged best-effort */ }
+  S.last = {}; S.sandbox = null;
+  renderHeader();
+  if (S.route.screen === 'case') go('cases'); else route();
+}
+async function act(caseId, action, payload) {
+  S.busy = true;
+  try {
+    const r = await api(`/api/cases/${encodeURIComponent(caseId)}/action`, { method: 'POST', body: Object.assign({ action }, payload || {}) });
+    toast(`${action.replace(/_/g, ' ').toLowerCase()} — case is now ${r.case.state.replace(/_/g, ' ')}`);
+    return r;
+  } catch (e) { toast(e.message, true); throw e; }
+  finally { S.busy = false; S.last = {}; await route(true); refresh(); }
+}
+
+/* ---------- Screens ---------- */
+const SCREENS = {};
+const head = (title, sub, tools) => `<div class="page-head"><div><h2>${title}</h2>${sub ? `<p>${sub}</p>` : ''}</div>${tools ? `<div class="tools">${tools}</div>` : ''}</div>`;
+const kpi = (l, v, s, c) => `<div class="kpi ${c || ''}"><div class="k-label">${esc(l)}</div><div class="k-value">${esc(v)}</div><div class="k-sub" title="${esc(s)}">${esc(s)}</div></div>`;
+const caseLink = (id, label) => can('case_detail') ? `<a href="#/case/${encodeURIComponent(id)}" class="linkish mono">${esc(label || id)}</a>` : `<span class="mono">${esc(label || id)}</span>`;
+const scLabel = () => { const s = curSc(); return s ? `${esc(s.label)} · scenario time ${esc(s.scenario_time)}` : ''; };
+function eventWho(e) { return e.actor_type === 'USER' ? `${esc(e.actor_name)} <span class="faint">· ${esc(ROLE_LABEL[e.actor_role] || e.actor_role || '')}</span>` : `<span class="pill">${esc(e.actor_name)}</span>`; }
+function eventDetail(e) {
+  const a = e.after || {};
+  const bits = [];
+  if (e.before && e.before.state && a.state) bits.push(`${e.before.state} → ${a.state}`);
+  else if (a.state) bits.push(a.state);
+  if (e.action === 'AGENT_TOOL_CALL') bits.push(`${a.ok === false ? '✗ ' : ''}${a.result || ''}`);
+  else if (a.outcome) bits.push(a.outcome + (a.rules && a.rules.length ? ' ' + a.rules.join(',') : ''));
+  else if (a.option_id) bits.push(a.label || a.option_id);
+  else if (a.probable_cause) bits.push(`${a.probable_cause} → ${a.recommended_option} (conf. ${a.confidence})`);
+  else if (a.detail) bits.push(a.detail);
+  else if (a.step) bits.push(`${a.step}: ${a.check || ''}`);
+  else if (a.mode) bits.push(`${a.mode} ${a.amount != null ? fmtMoney(a.amount) : ''}`);
+  else if (a.amount != null) bits.push(fmtMoney(a.amount));
+  if (e.reason) bits.push('“' + e.reason + '”');
+  return esc(bits.join(' · ')).slice(0, 400);
+}
+function feedTable(events, compact) {
+  if (!events.length) return '<div class="empty">No events yet.</div>';
+  return `<div class="table-wrap"><table class="grid compact"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Object</th>${compact ? '' : '<th>Scenario</th>'}<th>Detail</th></tr></thead><tbody>
+    ${events.map(e => `<tr class="feed-row${e.case_id ? ' clickable' : ''}"${e.case_id && can('case_detail') ? ` data-goto-case="${esc(e.case_id)}"` : ''}>
+      <td class="num" style="white-space:nowrap">${esc(fmtLocal(e.timestamp_local))}</td><td style="white-space:nowrap">${eventWho(e)}</td>
+      <td><span class="mono">${esc(e.action)}</span></td><td class="mono" style="white-space:nowrap">${esc(e.case_id || e.object_id || '')}</td>
+      ${compact ? '' : `<td class="mono">${esc(e.scenario_id || '—')}</td>`}<td>${eventDetail(e)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+SCREENS.dashboard = {
+  live: true,
+  load: () => api('/api/dashboard?feed=' + S.feed),
+  render(d) {
+    const k = d.kpis, sc = d.scenario;
+    const counts = k.counts ? `${k.counts.PASSED} / ${k.counts.HELD} / ${k.counts.NON_BLOCKING}` : '—';
+    const open = Object.entries(k.by_state).filter(([s, n]) => n && !['RESOLVED', 'CLOSED_NO_ACTION'].includes(s)).map(([s, n]) => `${n} ${s.replace(/_/g, ' ').toLowerCase()}`).join(', ');
+    const max = Math.max(1, ...Object.values(k.by_state));
+    const funnel = Object.entries(k.by_state).map(([s, n]) => `<div class="f-row${n ? '' : ' zero'}"><span>${esc(s.replace(/_/g, ' '))}</span><div class="f-track"><div class="f-bar" style="width:${(n / max) * 100}%;${!n ? '' : s === 'RETURNED_TO_DRI' ? 'background:var(--high)' : s === 'RESOLVED' ? 'background:var(--pass)' : s === 'CLOSED_NO_ACTION' ? 'background:var(--faint)' : ''}"></div></div><b class="num">${n}</b></div>`).join('');
+    const mw = S.me.role === 'AUDITOR' ? '<div class="muted-box">No actions required — read-only role.</div>' : d.mywork.length ? workTable(d.mywork, true) : '<div class="muted-box">Nothing is waiting on you in this scenario.</div>';
+    const fb = v => `<button type="button" data-feed="${v}" aria-pressed="${S.feed === v}">${{ mine: 'Mine', mycases: 'My cases', all: 'All' }[v]}</button>`;
+    return head('Dashboard', scLabel()) + `
+      <section class="kpis">
+        ${kpi('Draft bills in run', k.drafts == null ? '—' : k.drafts, sc.kind === 'REPLAY' ? (d.gate_run ? `${k.released} released` : 'gate not run yet') : 'back-scan scenario (no draft bills)')}
+        ${kpi('Passed / held / non-blocking', counts, k.counts ? 'pre-bill gate outcomes' : '—', k.counts && k.counts.HELD ? 'warn' : '')}
+        ${kpi('Open cases', k.open_cases, open || `${k.cases_total} case(s) in total`)}
+        ${kpi('$ prevented', fmtMoney(k.prevented_identified), `pre-issue reductions · ${fmtMoney(k.prevented_realized)} released corrected`, 'emph')}
+        ${kpi('$ remediated', fmtMoney(k.remediated_identified), `credits on issued bills · ${fmtMoney(k.remediated_approved)} approved`, 'emph')}
+        ${kpi('Open integration issues', k.open_issues, 'grouped by error signature', k.open_issues ? 'warn' : '')}
+      </section>
+      <div class="grid2">
+        <div class="card"><div class="card-head"><h2>Workflow funnel<span class="count">${k.cases_total} case(s)</span></h2></div><div class="card-body funnel">${funnel}</div></div>
+        <div class="card"><div class="card-head"><h2>My Work<span class="count">${d.mywork.length ? 'top ' + d.mywork.length : ''}</span></h2>${can('mywork') ? '<a class="linkish" href="#/mywork">Open My Work</a>' : ''}</div>${mw}</div>
+      </div>
+      <div class="card"><div class="card-head"><h2>Audit feed<span class="count">latest 25 · auto-refreshing</span></h2>
+        <div class="tools"><div class="chip-filter">${fb('mine')}${fb('mycases')}${fb('all')}</div>${can('audit') ? '<a class="linkish" href="#/audit">Full audit log</a>' : ''}</div></div>
+        ${feedTable(d.feed, true)}</div>`;
+  },
+};
+
+function workTable(items, compact) {
+  return `<div class="table-wrap"><table class="grid compact"><thead><tr><th>Age</th><th>Item</th><th>Customer</th><th class="r">Amount at stake</th><th>Next action</th></tr></thead><tbody>
+    ${items.map(i => `<tr class="clickable" data-work='${esc(JSON.stringify({ kind: i.kind, case_id: i.case_id, screen: i.screen }))}'>
+      <td class="num">${esc(fmtAge(i.age))}</td>
+      <td>${i.case_id ? `<span class="mono">${esc(i.case_id)}</span> ${typeBadge(i.case_type)}` : `<span class="pill">${esc(i.kind)}</span>`}${i.state ? `<div class="sub-line">${esc(i.state.replace(/_/g, ' '))}</div>` : ''}</td>
+      <td>${esc(i.customer_name || '')}${i.case_id && i.account_id ? tagFor(i.account_id) : ''}</td>
+      <td class="r num">${i.amount != null ? fmtMoney(i.amount) : ''}</td><td><b>${esc(i.next_action)}</b></td></tr>`).join('')}</tbody></table></div>`;
+}
+SCREENS.mywork = {
+  live: true,
+  load: () => api('/api/mywork'),
+  render(d) {
+    if (d.role === 'AUDITOR') return head('My Work', 'Read-only role') + `<div class="panel"><h2>No actions required — read-only role</h2><p>The Auditor can view every screen and use the <a class="linkish" href="#/audit">audit log</a> (export and integrity verification).</p></div>`;
+    return head('My Work', `Items waiting on <b>${esc(ROLE_LABEL[S.me.role])}</b> in ${esc(S.scId)}`) +
+      `<div class="card">${d.items.length ? workTable(d.items) : '<div class="empty">Nothing is waiting on you in this scenario. Try another scenario in the header.</div>'}</div>`;
+  },
+};
+
+SCREENS.billrun = {
+  live: true,
+  load: () => api('/api/gate'),
+  render(d) {
+    const sc = d.scenario, canAct = lvl('billrun') === 'A';
+    if (sc.kind !== 'REPLAY') return head('Bill Run', scLabel()) + `<div class="panel"><h2>No bill run in this scenario</h2><p>${esc(sc.label)} remediates bills that were already issued. Use the <a class="linkish" href="#/backscan">Back-scan</a> screen to send findings to the workflow, or pick a RUN_… replay in the header.</p></div>`;
+    const rules = Object.entries({ G1: 'Bill covers post-disconnect days (disconnect day billable; ends day before reconnect)', G2: 'Post-disconnect days carry ESTIMATED reads', G3: 'SA ACTIVE despite STOP_SERVICE / MOVE_OUT', G4: 'Integration message ERROR / SKIPPED / UNPROCESSED', G5: 'Unmatched disconnect near-matches this premise', G6: 'Actual kWh after disconnect on stopped SA / disconnected meter (revenue protection)' })
+      .map(([g, t]) => `<dt><span class="rule">${g}</span></dt><dd>${esc(t)}</dd>`).join('');
+    if (!d.gate) return head('Bill Run', scLabel()) + `<div class="card"><div class="card-head"><h2>Pre-bill gate — ${esc(sc.run_ts)}</h2></div><div class="card-body">
+      <p>The draft bills are the rows in <span class="mono">ccb_bill_segments.csv</span> with <span class="mono">bill_run_at = ${esc(sc.run_ts)}</span>, treated as not yet issued. The gate sees only records that existed at the scenario time.</p>
+      <dl class="kv">${rules}</dl>
+      <p><b>HELD</b> if G1, G2 or G5 fired · <b>NON-BLOCKING</b> if only G3/G4 (bill passes, ADVANCE case) · G6 opens a REVENUE_PROTECTION case.</p>
+      ${canAct ? '<button class="btn primary" data-action="run-gate" type="button">Run gate</button>' : `<p class="note">Only Billing Ops can run the gate.</p>`}</div></div>`;
+    const g = d.gate;
+    const f = S.billFilter || 'ALL';
+    const order = { HELD: 0, NON_BLOCKING: 1, PASSED: 2 };
+    const bills = g.bills.filter(b => f === 'ALL' || b.outcome === f).sort((a, b) => order[a.outcome] - order[b.outcome] || a.bill_id.localeCompare(b.bill_id));
+    const unreleasedPassed = g.bills.filter(b => b.outcome !== 'HELD' && !b.released).length;
+    const fb = v => `<button type="button" data-billfilter="${v}" aria-pressed="${f === v}">${v === 'ALL' ? 'All' : v.replace('_', '-').toLowerCase()} (${v === 'ALL' ? g.bills.length : g.counts[v]})</button>`;
+    const rows = bills.map(b => {
+      const caseIds = b.case_ids || [];
+      const caseHtml = caseIds.map(c => `${caseLink(c)} ${b.case_states && b.case_states[c] ? stateBadge(b.case_states[c]) : ''}`).join('<br>');
+      const ready = caseIds.some(c => b.case_states && b.case_states[c] === 'READY_TO_RELEASE');
+      let rel;
+      if (b.released) rel = `<span class="badge st-SUCCESS">RELEASED</span><div class="sub-line">${esc(b.release.mode)} ${b.release.mode === 'CANCELLED' ? '' : fmtMoney(b.release.amount)}</div>`;
+      else if (b.outcome !== 'HELD') rel = '<span class="faint">ready</span>';
+      else if (ready && canAct) rel = `<button class="btn sm primary" data-release="${esc(b.bill_id)}" type="button">Release</button>`;
+      else rel = `<span class="faint">held</span>`;
+      return `<tr><td class="mono">${esc(b.bill_id)}<div class="sub-line">${esc(b.bill_type)}</div></td><td>${esc(b.customer_name)}${tagFor(b.account_id)}<div class="sub-line mono">${esc(b.account_id)}</div></td>
+        <td class="num">${esc(b.period_start)} → ${esc(b.period_end)}</td><td class="r num">${fmtMoney(b.total)}</td><td>${outcomeBadge(b.outcome)}</td><td>${gateTags(b.rules)}</td>
+        <td>${caseHtml || '<span class="faint">—</span>'}</td><td>${rel}</td></tr>`;
+    }).join('');
+    return head('Bill Run', scLabel(), canAct ? `<button class="btn primary" data-action="release-passed" type="button"${unreleasedPassed ? '' : ' disabled'}>Release all passed (${unreleasedPassed})</button>` : '') + `
+      <section class="kpis">
+        ${kpi('Draft bills', g.bills.length, 'run ' + g.run_ts)}${kpi('Passed', g.counts.PASSED, 'no rule fired')}${kpi('Held', g.counts.HELD, 'G1 / G2 / G5', g.counts.HELD ? 'warn' : '')}
+        ${kpi('Non-blocking', g.counts.NON_BLOCKING, 'G3 / G4 only → ADVANCE case')}${kpi('Gate run by', (S.users.find(u => u.user_id === g.run_by) || {}).name || g.run_by, fmtLocal(g.run_at))}
+        ${kpi('Released', g.bills.filter(b => b.released).length, 'of ' + g.bills.length)}
+      </section>
+      ${d.inject_failure ? '<div class="banner warn"><div class="b-text"><b>Demo:</b> the next execution step will fail (inject failure is armed).</div></div>' : ''}
+      <div class="card"><div class="card-head"><h2>Draft bills</h2><div class="tools"><div class="chip-filter">${fb('ALL')}${fb('HELD')}${fb('NON_BLOCKING')}${fb('PASSED')}</div></div></div>
+        <div class="table-wrap"><table class="grid"><thead><tr><th>Bill</th><th>Customer</th><th>Period</th><th class="r">Total</th><th>Outcome</th><th>Rules</th><th>Case</th><th>Release</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="card-foot">A held bill can be released only when its case is READY_TO_RELEASE (corrected and verified, or the DRI chose “Release as-is” with a reason).</div></div>
+      <div class="card"><details class="legend"><summary>Gate rules</summary><div class="legend-grid"><dl>${rules}</dl></div></details></div>`;
+  },
+};
+
+SCREENS.cases = {
+  live: true,
+  load: () => api('/api/cases'),
+  render(d) {
+    const rows = d.cases.map(c => `<tr class="clickable" data-goto-case="${esc(c.case_id)}">
+      <td class="mono">${esc(c.case_id)}</td><td>${typeBadge(c.case_type)}</td><td>${stateBadge(c.state)}${c.owner_role ? `<div class="sub-line">waiting on ${esc(ROLE_LABEL[c.owner_role])}</div>` : ''}</td>
+      <td>${esc(c.customer_name)}${tagFor(c.account_id)}<div class="sub-line mono">${esc(c.account_id)}</div></td><td>${gateTags(c.gates)}</td>
+      <td class="r num">${fmtMoney(c.amount_at_stake || 0)}</td>
+      <td>${c.probable_cause ? `<b>${esc(c.probable_cause)}</b>` : c.investigation_error ? '<span class="badge sev-HIGH">GUARDRAIL</span>' : AGENT_STATES.includes(c.state) ? '<span class="spinner"></span>' : '—'}</td>
+      <td>${esc(c.recommended_option || '')}</td><td class="r num">${c.confidence != null ? c.confidence.toFixed(2) : ''}</td></tr>`).join('');
+    return head('Cases', scLabel()) + `<div class="card">${d.cases.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Case</th><th>Type</th><th>State</th><th>Customer</th><th>Gates</th><th class="r">At stake</th><th>Cause</th><th>Recommended</th><th class="r">Conf.</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : `<div class="empty">No cases in this scenario yet. ${curSc() && curSc().kind === 'REPLAY' ? 'Billing Ops runs the gate on the Bill Run screen.' : 'Billing Ops sends back-scan findings from the Back-scan screen.'}</div>`}</div>`;
+  },
+};
+
+/* ---------- Role queues ---------- */
+const QUEUE_INFO = {
+  masterdata: ['Master data tasks', 'Confirm or reject suggested premise matches (G5).'],
+  field: ['Field tasks', 'Record what the field visit found.'],
+  finance: ['Finance approvals', 'Credits on issued bills and reductions of $1,000 or more need approval; credit memos post to an OPEN GL period.'],
+  regulatory: ['Regulatory review', 'Accounts with an open billing dispute or regulatory complaint: approve or edit the drafted customer letter and regulator response.'],
+};
+function readsTable(rs, dd) {
+  if (!rs || !rs.length) return '<span class="faint">no reads</span>';
+  return `<table class="grid compact"><thead><tr><th>Read</th><th>Date</th><th class="r">kWh</th><th>Quality</th></tr></thead><tbody>${rs.map(r => `<tr${r.read_date > dd ? ' style="font-weight:600"' : ''}><td class="mono">${esc(r.read_id)}</td><td class="num">${esc(r.read_date)}${r.read_date === dd ? ' <span class="pill">disconnect day</span>' : ''}</td><td class="r num">${esc(r.kwh)}</td><td>${r.read_quality === 'ESTIMATED' ? '<span class="badge sev-MEDIUM">ESTIMATED</span>' : esc(r.read_quality)}</td></tr>`).join('')}</tbody></table>`;
+}
+function queueItem(screen, c) {
+  const open = c.open && c.allowed_actions && c.allowed_actions.length;
+  const t = c.task_context || {};
+  const title = `<div class="card-head"><h2><span class="mono">${esc(c.case_id)}</span> ${typeBadge(c.case_type)} ${esc(c.customer_name)}${tagFor(c.account_id)}</h2><div class="tools">${stateBadge(c.state)} ${can('case_detail') ? caseLink(c.case_id, 'Open case') : ''}</div></div>`;
+  let body = '', form = '';
+  if (screen === 'masterdata') {
+    body = `<div class="compare"><div class="cbox"><div class="form-label">OMS premise as recorded (${esc(c.root_wo_id)})</div><b>${esc(c.unmatched_premise)}</b><div class="note">not in ref_id_crosswalk</div></div>
+      <div class="vs">→</div><div class="cbox"><div class="form-label">Suggested crosswalk match</div><b>${esc(c.suggested_premise)}</b>
+      <div class="note">SA ${esc((t.sa || {}).sa_id)} (${esc((t.sa || {}).sa_status)}) · meter ${esc(c.meter_id)} · ${esc((t.sa || {}).premise_address || '')}</div></div></div>
+      <div class="form-row"><span class="form-label">Read-timing evidence on meter ${esc(c.meter_id)} around the disconnect (${esc(c.disconnect_date)})</span>${readsTable(t.reads_around_disconnect, c.disconnect_date)}</div>
+      ${c.master_data ? `<p><b>${esc(c.master_data.outcome)}</b> by ${esc(c.master_data.by)} ${c.master_data.note ? '— “' + esc(c.master_data.note) + '”' : ''}</p>` : ''}`;
+    if (open) form = `<div class="form-row"><label>Note / reason (required to reject)</label><textarea class="input f-reason" data-track></textarea></div>
+      <div class="btn-row"><button class="btn primary" data-act="CONFIRM_MATCH" type="button">Confirm match</button><button class="btn danger" data-act="REJECT_MATCH" type="button">Reject match</button></div>`;
+  } else if (screen === 'field') {
+    body = `<dl class="kv"><dt>Premise</dt><dd class="mono">${esc(c.premise)} · meter ${esc(c.meter_id)}</dd><dt>Disconnect</dt><dd>${esc(c.root_wo_id)} ${esc(c.wo_subtype)} on ${esc(c.disconnect_date)}</dd>
+      <dt>Gates</dt><dd>${gateTags(c.gates)}</dd><dt>Why</dt><dd>${esc(c.summary || (c.investigation || {}).summary || '')}</dd></dl>
+      <div class="form-row"><span class="form-label">Reads around the disconnect</span>${readsTable(t.reads_around_disconnect, c.disconnect_date)}</div>
+      ${c.field_outcome ? `<p><b>${esc(c.field_outcome.outcome)}</b> recorded by ${esc(c.field_outcome.by)} ${c.field_outcome.note ? '— “' + esc(c.field_outcome.note) + '”' : ''}</p>` : ''}`;
+    if (open) form = `<div class="form-row"><label>Outcome</label><select class="input f-outcome"><option value="DISCONNECT_CONFIRMED">Disconnect confirmed</option><option value="SERVICE_FOUND_CONNECTED">Service found connected</option><option value="METER_FAULT">Meter fault</option><option value="SUSPECTED_TAMPER">Suspected tamper</option></select></div>
+      <div class="form-row"><label>Note</label><textarea class="input f-reason" data-track></textarea></div><div class="btn-row"><button class="btn primary" data-act="FIELD_OUTCOME" type="button">Record outcome</button></div>`;
+  } else if (screen === 'finance') {
+    const e = c.expected || {};
+    body = `<dl class="kv"><dt>Amount</dt><dd><b class="num">${fmtMoney(c.amount_at_stake)}</b> ${c.case_type === 'PREVENT' ? '(reduction of a held draft)' : '(credit memo on issued bills)'}</dd>
+      <dt>GL period</dt><dd>${esc(e.gl_period || '— (draft corrected before issue)')}</dd><dt>Bills affected</dt><dd class="mono">${esc([c.draft_bill_id].concat(c.issued_bill_ids || []).filter(Boolean).join(', '))}</dd>
+      <dt>Decision</dt><dd>${esc((c.decision || {}).label || '—')} by ${esc((c.decision || {}).by || '—')}</dd><dt>Cause</dt><dd>${esc((c.investigation || {}).probable_cause_label || '')}</dd></dl>
+      ${c.finance ? `<p><b>${esc(c.finance.outcome)}</b> by ${esc(c.finance.by)} ${c.finance.note ? '— “' + esc(c.finance.note) + '”' : ''}</p>` : ''}`;
+    if (open) form = `<div class="form-row"><label>Comment / reason (required to reject)</label><textarea class="input f-reason" data-track></textarea></div>
+      <div class="btn-row"><button class="btn primary" data-act="FINANCE_APPROVE" type="button">Approve ${fmtMoney(c.amount_at_stake)}</button><button class="btn danger" data-act="FINANCE_REJECT" type="button">Reject</button></div>`;
+  } else if (screen === 'regulatory') {
+    const cm = c.comms || {};
+    const ro = !open;
+    body = `<p class="note">Open CRM cases: ${esc((c.regulatory_crm_cases || []).join(', ') || '—')} · ${cm.edits && cm.edits.length ? cm.edits.length + ' edit(s) logged' : 'no edits yet'}</p>
+      <div class="form-row"><label>Customer letter</label><textarea class="input letter-edit f-letter" data-track${ro ? ' readonly' : ''}>${esc(cm.customer_letter || '')}</textarea></div>
+      <div class="form-row"><label>Regulator response</label><textarea class="input letter-edit f-response" data-track${ro ? ' readonly' : ''}>${esc(cm.regulator_response || '')}</textarea></div>`;
+    if (open) form = `<div class="form-row"><label>Comment / reason (required to reject)</label><textarea class="input f-reason" data-track></textarea></div>
+      <div class="btn-row"><button class="btn" data-act="EDIT_COMMS" type="button">Save edits</button><button class="btn primary" data-act="APPROVE_COMMS" type="button">Approve communications</button><button class="btn danger" data-act="REJECT_COMMS" type="button">Reject (return to DRI)</button></div>`;
+  }
+  return `<div class="card${open ? ' action-panel' : ''}" data-case="${esc(c.case_id)}">${title}<div class="card-body">${body}${form}</div></div>`;
+}
+for (const qs of ['masterdata', 'field', 'finance', 'regulatory']) {
+  SCREENS[qs] = {
+    live: true,
+    load: () => api('/api/queue/' + qs),
+    render(d) {
+      const open = d.items.filter(i => i.open), done = d.items.filter(i => !i.open);
+      return head(QUEUE_INFO[qs][0], QUEUE_INFO[qs][1] + ' · ' + esc(S.scId)) +
+        (open.length ? open.map(c => queueItem(qs, c)).join('') : '<div class="card"><div class="empty">No open tasks in this scenario.</div></div>') +
+        (done.length ? `<h3 class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin:22px 0 8px">Completed</h3>` + done.map(c => queueItem(qs, c)).join('') : '');
+    },
+  };
+}
+
+SCREENS.integration = {
+  live: true,
+  load: () => api('/api/integration/issues'),
+  render(d) {
+    const canAct = lvl('integration') === 'A';
+    const cards = d.issues.map(i => `<div class="card" data-issue="${esc(i.issue_id)}"><div class="card-head"><h2><span class="mono">${esc(i.issue_id)}</span> ${esc(i.signature)}</h2>
+        <div class="tools"><span class="badge ${i.status === 'RESOLVED' ? 'st-SUCCESS' : i.status === 'ACKNOWLEDGED' ? 'sev-MEDIUM' : 'st-ERROR'}">${esc(i.status)}</span>${i.ticket_ref ? `<span class="pill">${esc(i.ticket_ref)}</span>` : ''}</div></div>
+      <div class="card-body"><dl class="kv"><dt>Messages</dt><dd class="mono">${esc(i.msg_ids.join(', ') || '—')}</dd><dt>Work orders</dt><dd class="mono">${esc(i.wo_ids.join(', '))}</dd>
+        <dt>Affected cases</dt><dd>${i.cases.map(c => `${caseLink(c.case_id)} ${typeBadge(c.case_type)} ${esc(c.customer_name)}${tagFor(c.account_id)} ${stateBadge(c.state)}`).join('<br>')}</dd></dl>
+        ${canAct && i.status !== 'RESOLVED' ? `<div class="btn-row" style="align-items:center"><input class="input f-ticket" data-track placeholder="Ticket reference, e.g. INC-12345" value="${esc(i.ticket_ref)}" style="max-width:260px">
+          <button class="btn" data-issue-act="SET_TICKET" type="button">Save ticket</button>${i.status === 'OPEN' ? '<button class="btn" data-issue-act="ACKNOWLEDGE" type="button">Acknowledge</button>' : ''}
+          <button class="btn primary" data-issue-act="RESOLVE" type="button">Mark root cause fixed</button></div>` : ''}
+        ${i.history.length ? `<p class="note">${i.history.map(h => `${esc(h.action)} by ${esc(h.by)}${h.ticket_ref ? ' (' + esc(h.ticket_ref) + ')' : ''}`).join(' · ')}</p>` : ''}
+        <p class="note">Integration issues never block a case.</p></div></div>`).join('');
+    return head('Integration issues', 'OMS → CC&B field-activity failures grouped by error signature · ' + esc(S.scId)) + (cards || '<div class="card"><div class="empty">No integration issues in this scenario.</div></div>');
+  },
+};
+
+SCREENS.audit = {
+  load: async () => {
+    const f = S.auditF, qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+    return api('/api/audit?' + qs);
+  },
+  render(d) {
+    const f = S.auditF, isAud = lvl('audit') === 'X';
+    const opt = (vals, cur, all) => `<option value="">${all}</option>` + vals.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    const scs = (curDs() || { scenarios: [] }).scenarios.map(s => [s.scenario_id, s.scenario_id]);
+    return head('Audit log', 'Append-only · SHA-256 hash chain · state/audit_log.jsonl', (isAud ? `<button class="btn" data-action="audit-export" type="button">Export CSV</button><button class="btn primary" data-action="audit-verify" type="button">Verify integrity</button>` : '<span class="note">Export and integrity verification: Auditor only</span>')) +
+      `${S.auditVerify ? `<div class="overall ${S.auditVerify.ok ? 'pass' : 'fail'}"><span class="o-big">${S.auditVerify.ok ? '✓ Chain intact' : '✗ Broken link'}</span><span class="o-sub">${S.auditVerify.ok ? `${S.auditVerify.events} events re-hashed; no breaks.` : `First broken link at line ${S.auditVerify.first_broken.line} (${esc(S.auditVerify.first_broken.event_id || '?')}): ${esc(S.auditVerify.first_broken.reason)}`}</span></div>` : ''}
+      <div class="card"><div class="card-body"><div class="grid-filters">
+        <select class="input" data-af="user">${opt(S.users.map(u => [u.user_id, u.name + ' (' + u.role + ')']).concat([['sys.gate', 'Pre-bill gate'], ['agent.investigator', 'Investigation agent'], ['agent.executor', 'Execution agent'], ['sys.verifier', 'Verifier']]), f.user, 'All actors')}</select>
+        <select class="input" data-af="role">${opt(Object.keys(ROLE_LABEL).map(r => [r, ROLE_LABEL[r]]).concat([['AGENT', 'Agents'], ['SYSTEM', 'System']]), f.role, 'All roles')}</select>
+        <select class="input" data-af="action">${opt(d.actions.map(a => [a, a]), f.action, 'All actions')}</select>
+        <select class="input" data-af="scenario">${opt(scs, f.scenario, 'All scenarios')}</select>
+        <input class="input" data-af="case" placeholder="Case id, e.g. WF-1102-01" value="${esc(f.case || '')}">
+        <input class="input" type="date" data-af="from" value="${esc(f.from || '')}" aria-label="From date">
+        <input class="input" type="date" data-af="to" value="${esc(f.to || '')}" aria-label="To date">
+        <input class="input" type="search" data-af="q" placeholder="Free-text search" value="${esc(f.q || '')}">
+      </div><div class="btn-row"><button class="btn primary" data-action="audit-apply" type="button">Apply filters</button><button class="btn" data-action="audit-clear" type="button">Clear</button><span class="note">${d.total.toLocaleString()} matching event(s)${d.total > d.events.length ? ' · newest ' + d.events.length + ' shown' : ''}</span></div></div></div>
+      <div class="card">${feedTable(d.events)}</div>`;
+  },
+};
+
+/* ---------- Case detail ---------- */
+function impactText(i) {
+  if (!i) return '—';
+  switch (i.kind) {
+    case 'DRAFT_BILL': return `<span class="impact">${fmtMoney(i.before)}<span class="arrow">→</span><span class="after">${i.action === 'CANCEL' ? 'cancelled' : fmtMoney(i.after)}</span></span>${i.reduction ? ` <span class="sub-line">−${fmtMoney(i.reduction)}${i.fixed_retained ? ` · fixed ${fmtMoney(i.fixed_retained)} retained` : ''}</span>` : ''}`;
+    case 'CREDIT': return `<span class="impact">credit <span class="after">${fmtMoney(i.credit)}</span></span><span class="sub-line">${esc(i.bill_ids.join(', '))} · GL ${esc(i.gl_period || '')}</span>`;
+    case 'REVENUE_PROTECTION': return `<span class="impact">${fmtKwh(i.unbilled_kwh)} kWh unbilled</span><span class="sub-line">≈ ${fmtMoney(i.unbilled_value)} at tariff</span>`;
+    case 'ACCOUNT': return `<span class="impact">stop SA effective ${esc(i.stop_effective)}</span><span class="sub-line">protects the next bill</span>`;
+    case 'PENDING': return `<span class="impact">${fmtMoney(i.before)} held pending field</span>`;
+    default: return '<span class="faint">no financial change</span>';
+  }
+}
+function statesLine(c) {
+  const seen = new Set(c.history.map(h => h.state));
+  const curIdx = CASE_STATES.indexOf(c.state);
+  const optional = ['MASTER_DATA_REVIEW', 'FIELD_VERIFICATION', 'FINANCE_APPROVAL', 'REGULATORY_REVIEW', 'READY_TO_RELEASE'];
+  const lastSeenIdx = Math.max(...[...seen].map(s => CASE_STATES.indexOf(s)));
+  const chips = CASE_STATES.map((s, i) => {
+    const cls = s === c.state ? 'cur' : seen.has(s) ? 'done' : (optional.includes(s) && i < lastSeenIdx) ? 'skip' : '';
+    return `<span class="${cls}">${esc(s.replace(/_/g, ' ').toLowerCase())}</span>`;
+  }).join('');
+  const side = ['RETURNED_TO_DRI', 'CLOSED_NO_ACTION'].filter(s => seen.has(s)).map(s => `<span class="${s === c.state ? 'cur' : 'done'}" style="${s === 'RETURNED_TO_DRI' ? 'border-color:var(--high);color:' + (s === c.state ? '#fff;background:var(--high)' : 'var(--high)') : ''}">${esc(s.replace(/_/g, ' ').toLowerCase())}</span>`).join('');
+  return `<div class="states-line" id="statesLine">${chips}${side}</div>`;
+}
+function activityPanel(c) {
+  if (S.agent && S.agent.show_agent_activity === false) return '';
+  const working = AGENT_STATES.includes(c.state) || (c.state === 'PLAN_APPROVAL' && !c.plan);
+  const who = c.state === 'DETECTED' ? 'Investigation agent is working' : c.state === 'VERIFYING' ? 'Verifier is re-running the gate' : 'Execution agent is working';
+  const rows = (c.activity || []).slice().reverse().map(a => `<div class="a-row${a.ok ? '' : ' bad'}"><span class="a-n">${a.n}</span>
+      <span class="a-tool">${esc(a.tool)}<span class="a-agent">${esc(a.agent)}</span></span><span>${esc(a.summary)}<span class="a-args">${esc(a.args)}</span></span></div>`).join('');
+  return `<div class="card" id="activityPanel"><div class="card-head"><h2>Agent activity<span class="count">${(c.activity || []).length} tool call(s) · mock (scripted)</span></h2></div>
+    ${working ? `<div class="working"><span class="spinner"></span> ${who}…</div>` : ''}
+    <div class="activity">${rows || '<div class="empty">No agent activity yet.</div>'}</div></div>`;
+}
+function actionForm(c) {
+  const acts = c.allowed_actions || [];
+  const out = [];
+  const reasonBox = (lbl) => `<div class="form-row"><label>${esc(lbl)}</label><textarea class="input f-reason" data-track></textarea></div>`;
+  if (acts.includes('DECIDE')) {
+    const inv = c.investigation || {};
+    const imp = Object.fromEntries((inv.options || []).map(o => [o.option_id, o.expected_financial_impact]));
+    const rec = inv.recommended_option;
+    const pb = c.playbook || { options: [] };
+    const opts = pb.options.map(o => {
+      const disabled = (o.option_id === 'HOLD_FIELD_VERIFICATION' && c.field_outcome) || (o.requires_match_confirmed && !(c.master_data && c.master_data.outcome === 'CONFIRMED'));
+      const route = o.routes_to && !c.field_outcome ? ' → field verification first' : o.terminal === 'RELEASE_AS_IS' ? ' → bill released unchanged' : o.terminal === 'CLOSE' ? ' → case closed' : o.steps.length ? ` → plan: ${o.steps.length} step type(s)` : '';
+      return `<label class="${o.option_id === rec ? 'rec' : ''}"><input type="radio" name="opt" value="${esc(o.option_id)}"${o.option_id === rec && !disabled ? ' checked' : ''}${disabled ? ' disabled' : ''}>
+        <span><span class="o-label">${esc(o.label)}</span>${o.option_id === rec ? ' <span class="pill">recommended</span>' : ''}${o.requires_reason ? ' <span class="pill">reason required</span>' : ''}
+        <span class="o-sub" style="display:block">${impactText(imp[o.option_id])}${esc(route)}${disabled ? ' · not available now' : ''}</span></span></label>`;
+    }).join('');
+    out.push(`<div class="opt-list">${opts}</div>${c.field_outcome ? `<p class="note">Field outcome: <b>${esc(c.field_outcome.outcome)}</b> ${c.field_outcome.note ? '— “' + esc(c.field_outcome.note) + '”' : ''}</p>` : ''}
+      ${reasonBox('Reason / comment (required for release as-is, defer, no action, close)')}
+      <div class="btn-row"><button class="btn primary" data-act="DECIDE" type="button">Record decision</button>${acts.includes('CLOSE_NO_ACTION') ? '<button class="btn danger" data-act="CLOSE_NO_ACTION" type="button">Close — no action</button>' : ''}</div>`);
+  } else if (acts.includes('APPROVE_PLAN')) {
+    const p = c.plan;
+    out.push(`<p>The execution agent proposes <b>${p.steps.length}</b> step(s) for <b>${esc(p.label)}</b>. The server validated that every step belongs to the approved playbook; the agent may only run the next approved step.</p>
+      <ol>${p.steps.map(s => `<li><span class="mono">${esc(s.step)}</span> <span class="faint mono">${esc(Object.entries(s.params).filter(([k]) => k !== 'note').map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join(',') : v)).join(' '))}</span><div class="sub-line">check: ${esc(s.check)}</div></li>`).join('')}</ol>
+      ${c.requires_regulatory ? '<p class="note">Communications go to Regulatory review after verification.</p>' : '<p class="note">No regulatory flag: approving the plan also approves the drafted customer letter (logged as COMMS_APPROVED).</p>'}
+      ${reasonBox('Comment (required to reject)')}
+      <div class="btn-row"><button class="btn primary" data-act="APPROVE_PLAN" type="button">Approve plan</button><button class="btn danger" data-act="REJECT_PLAN" type="button">Reject plan</button>${acts.includes('CLOSE_NO_ACTION') ? '<button class="btn" data-act="CLOSE_NO_ACTION" type="button">Close — no action</button>' : ''}</div>`);
+  } else if (c.state === 'PLAN_APPROVAL' && !c.plan) {
+    out.push('<div class="working"><span class="spinner"></span> The execution agent is building the plan…</div>');
+  }
+  if (acts.includes('CONFIRM_MATCH')) out.push(queueItem('masterdata', Object.assign({}, c, { open: true })).replace(/^<div class="card[^"]*"[^>]*>[\s\S]*?<div class="card-body">/, '').replace(/<\/div><\/div>$/, ''));
+  if (acts.includes('FIELD_OUTCOME')) out.push(queueItem('field', Object.assign({}, c, { open: true })).replace(/^<div class="card[^"]*"[^>]*>[\s\S]*?<div class="card-body">/, '').replace(/<\/div><\/div>$/, ''));
+  if (acts.includes('FINANCE_APPROVE')) out.push(queueItem('finance', Object.assign({}, c, { open: true })).replace(/^<div class="card[^"]*"[^>]*>[\s\S]*?<div class="card-body">/, '').replace(/<\/div><\/div>$/, ''));
+  if (acts.includes('APPROVE_COMMS')) out.push(queueItem('regulatory', Object.assign({}, c, { open: true })).replace(/^<div class="card[^"]*"[^>]*>[\s\S]*?<div class="card-body">/, '').replace(/<\/div><\/div>$/, ''));
+  if (c.state === 'READY_TO_RELEASE' && lvl('billrun') === 'A' && c.draft_bill_id) {
+    const sb = c.sandbox_bill || {};
+    const what = (c.release || {}).mode === 'AS_IS' ? `unchanged (release as-is: “${esc(c.release.reason)}”)` : sb.bill_status === 'CANCELLED' ? 'as cancelled (no bill issued)' : `regenerated: ${fmtMoney(+sb.total_amount || 0)} for ${esc(sb.period_start)} → ${esc(sb.period_end)}`;
+    out.push(`<p>Bill <span class="mono">${esc(c.draft_bill_id)}</span> is ready to release ${what}.</p><div class="btn-row"><button class="btn primary" data-release="${esc(c.draft_bill_id)}" type="button">Release bill</button></div>`);
+  }
+  if (!out.length) return '';
+  const owner = c.owner_role ? ROLE_LABEL[c.owner_role] : '';
+  return `<div class="card action-panel" data-case="${esc(c.case_id)}"><div class="card-head"><h2>Your action${owner ? ' — ' + esc(owner) : ''}</h2><div class="tools">${stateBadge(c.state)}</div></div><div class="card-body">${out.join('<hr style="border:0;border-top:1px solid var(--border);margin:14px 0">')}</div></div>`;
+}
+function evidenceRows(inv) {
+  return (inv.evidence || []).map(e => {
+    const sys = { OMS: 'OMS', 'CC&B': 'CCB', MDM: 'MDM', 'Master data': 'XWALK', Integration: 'INT', CRM: 'CRM', GL: 'GL' }[e.system] || 'KEY';
+    const link = can('explorer') ? `<button class="linkish mono" data-goto-file="${esc(e.file)}" data-goto-q="${esc(e.record_id)}" title="Open in Data Explorer">${esc(e.record_id)}</button>` : `<span class="mono">${esc(e.record_id)}</span>`;
+    return `<tr><td><span class="sys sys-${sys}">${esc(e.system)}</span></td><td class="mono" style="white-space:nowrap">${esc(e.file)}</td><td style="white-space:nowrap">${link}</td><td>${esc(e.claim)}</td></tr>`;
+  }).join('');
+}
+SCREENS.case = {
+  live: true,
+  load: (id, first) => api('/api/cases/' + encodeURIComponent(id) + (first ? '?view=1' : '')),
+  partial(c) { const a = $('#activityPanel'); if (a) a.outerHTML = activityPanel(c); const s = $('#statesLine'); if (s) s.outerHTML = statesLine(c); },
+  render(c) {
+    const back = `<a class="linkish" href="#/${can('cases') ? 'cases' : 'mywork'}">← ${can('cases') ? 'Cases' : 'My Work'}</a>`;
+    const hdr = `${back}<div class="page-head" style="margin-top:6px"><div><h2><span class="mono">${esc(c.case_id)}</span> ${typeBadge(c.case_type)} ${esc(c.customer_name)}${tagFor(c.account_id)}</h2>
+      <p><span class="mono">${esc(c.account_id)}</span> · SA <span class="mono">${esc(c.sa_id)}</span> · premise <span class="mono">${esc(c.premise)}</span> · disconnect ${esc(c.root_wo_id)} (${esc(c.wo_subtype)}) on ${esc(c.disconnect_date)} · gates ${gateTags(c.gates)}</p></div>
+      <div class="tools">${stateBadge(c.state)}${c.owner_role ? `<span class="note">waiting on <b>${esc(ROLE_LABEL[c.owner_role])}</b></span>` : ''}</div></div>${statesLine(c)}`;
+    if (c.view === 'task') {
+      const iss = c.integration_issue;
+      return hdr + `${actionForm(c)}<div class="card"><div class="card-head"><h2>Case summary</h2><span class="note">Task view — full evidence is limited to case owners</span></div><div class="card-body"><p>${esc(c.summary || 'Investigation in progress…')}</p>
+        <dl class="kv"><dt>At stake</dt><dd>${fmtMoney(c.amount_at_stake || 0)}</dd>${c.unmatched_premise ? `<dt>Premise match</dt><dd>${esc(c.unmatched_premise)} → ${esc(c.suggested_premise)} ${c.master_data ? '(' + esc(c.master_data.outcome) + ')' : ''}</dd>` : ''}
+        ${c.field_outcome ? `<dt>Field outcome</dt><dd>${esc(c.field_outcome.outcome)}</dd>` : ''}${iss ? `<dt>Integration issue</dt><dd><a class="linkish" href="#/integration">${esc(iss.issue_id)}</a> ${esc(iss.signature)} (${esc(iss.status)})</dd>` : ''}</dl></div></div>`;
+    }
+    const inv = c.investigation;
+    const dec = c.decision ? c.decision.option_id : null;
+    const invCard = inv ? `<div class="card"><div class="card-head"><h2>Investigation</h2><div class="tools"><span class="pill">cause ${esc(inv.probable_cause)}</span><span class="pill">confidence ${inv.confidence.toFixed(2)}</span></div></div>
+        <div class="card-body"><p style="margin-top:0">${esc(inv.summary)}</p>
+        <dl class="kv"><dt>Probable cause</dt><dd><b>${esc(inv.probable_cause)}</b> — ${esc(inv.probable_cause_label)}</dd><dt>Recommended</dt><dd><b>${esc(inv.recommended_label)}</b></dd>
+        <dt>Confidence</dt><dd>${inv.confidence.toFixed(2)} = 0.60 + 0.10 × ${inv.confidence_signals.length} signal(s)${inv.confidence >= 0.95 ? ' (capped)' : ''}: ${esc(inv.confidence_signals.join('; ') || 'none')}</dd>
+        ${inv.open_questions.length ? `<dt>Open questions</dt><dd><ul style="margin:0;padding-left:18px">${inv.open_questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul></dd>` : ''}</dl></div>
+        <div class="table-wrap"><table class="grid compact"><thead><tr><th>System</th><th>File</th><th>Record</th><th>Claim</th></tr></thead><tbody>${evidenceRows(inv)}</tbody></table></div>
+        <div class="card-foot">Every claim cites a record that existed at scenario time (validated by the server).${can('explorer') ? ' Click a record to open it in the Data Explorer.' : ''}</div></div>`
+      : `<div class="card"><div class="card-head"><h2>Investigation</h2></div><div class="card-body">${c.investigation_error ? `<p class="badge sev-HIGH">Guardrail stopped the investigation</p><p>${esc(c.investigation_error)}</p>` : '<div class="working"><span class="spinner"></span> Investigation agent is working…</div>'}</div></div>`;
+    const options = inv ? `<div class="card"><div class="card-head"><h2>Options &amp; financial impact</h2><span class="note">amounts from calculate_correction</span></div><div class="table-wrap"><table class="grid compact"><thead><tr><th>Option</th><th>Bill before → after / impact</th><th>Rationale</th></tr></thead><tbody>
+        ${inv.options.map(o => `<tr${o.option_id === dec ? ' style="background:var(--accent-soft)"' : ''}><td><b>${esc(o.label)}</b>${o.option_id === inv.recommended_option ? ' <span class="pill">recommended</span>' : ''}${o.option_id === dec ? ' <span class="pill">decided</span>' : ''}</td><td>${impactText(o.expected_financial_impact)}</td><td>${esc(o.rationale)}</td></tr>`).join('')}</tbody></table></div>
+        ${c.decisions.length ? `<div class="card-foot">${c.decisions.map(d => `Decision: <b>${esc(d.label)}</b> by ${esc(d.by)}${d.reason ? ' — “' + esc(d.reason) + '”' : ''}`).join('<br>')}</div>` : ''}</div>` : '';
+    const plan = c.plan ? `<div class="card"><div class="card-head"><h2>Plan — ${esc(c.plan.label)}</h2><div class="tools">${c.plan.approved_by ? `<span class="pill">approved by ${esc(c.plan.approved_by)}</span>` : '<span class="pill">awaiting approval</span>'}</div></div><div class="table-wrap"><table class="grid compact"><thead><tr><th>#</th><th>Step</th><th>Parameters</th><th>Status</th><th>Result / check</th></tr></thead><tbody>
+        ${c.plan.steps.map(s => `<tr><td>${s.seq}</td><td class="mono">${esc(s.step)}</td><td class="mono" style="font-size:11.5px">${esc(Object.entries(s.params).filter(([k]) => k !== 'note').map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join(',') : v)).join(' '))}</td>
+          <td><span class="badge ${s.status === 'DONE' ? 'st-SUCCESS' : s.status === 'FAILED' ? 'st-ERROR' : 'st-NONE'}">${esc(s.status)}</span></td><td>${esc(s.result || '')}<div class="sub-line">${esc(s.check_result || s.check)}</div></td></tr>`).join('')}</tbody></table></div>
+        ${c.execution && c.execution.status === 'STEP_FAILED' ? `<div class="card-foot" style="color:var(--high)"><b>STEP_FAILED:</b> ${esc(c.execution.explanation)}</div>` : ''}
+        ${c.verification ? `<div class="card-foot"><b>Verifier:</b> ${c.verification.passed ? '✓' : '✗'} ${esc(c.verification.detail)}</div>` : ''}</div>` : '';
+    const cm = c.comms || {};
+    const drafts = cm.customer_letter ? `<div class="card"><div class="card-head"><h2>Drafted communications</h2><div class="tools">${cm.approved_by ? `<span class="pill">approved by ${esc(cm.approved_by)}</span>` : '<span class="pill">not yet approved</span>'}${c.requires_regulatory ? '<span class="pill">regulatory review required</span>' : ''}</div></div>
+        <div class="card-body"><div class="form-label">Customer letter</div><pre class="letter">${esc(cm.customer_letter)}</pre>${cm.regulator_response ? `<div class="form-label" style="margin-top:10px">Regulator response</div><pre class="letter">${esc(cm.regulator_response)}</pre>` : ''}${cm.edits && cm.edits.length ? `<p class="note">${cm.edits.length} edit(s) logged.</p>` : ''}</div></div>` : '';
+    const ex = c.expected || {};
+    const facts = `<div class="card"><div class="card-head"><h2>Case facts</h2></div><div class="card-body"><dl class="kv">
+        <dt>Scenario</dt><dd>${esc(c.scenario_id)} · time ${esc(c.scenario_time)}</dd>
+        <dt>Window</dt><dd>${esc(c.window.start)} → ${esc(c.window.end || 'open')}${c.reconnect_wo_id ? ' (reconnect ' + esc(c.reconnect_wo_id) + ')' : ''}</dd>
+        ${c.draft_bill_id ? `<dt>Held draft</dt><dd class="mono">${esc(c.draft_bill_id)} · ${esc(ex.action)} ${fmtMoney(ex.before || 0)} → ${fmtMoney(ex.after || 0)}</dd>` : ''}
+        ${c.issued_bill_ids && c.issued_bill_ids.length ? `<dt>Issued bills</dt><dd class="mono">${esc(c.issued_bill_ids.join(', '))}</dd>` : ''}
+        ${ex.credit != null ? `<dt>Credit</dt><dd>${fmtMoney(ex.credit)} → GL ${esc(ex.gl_period || '')}</dd>` : ''}
+        ${c.linked_case_ids.length ? `<dt>Linked</dt><dd>${c.linked_case_ids.map(x => caseLink(x)).join(', ')}</dd>` : ''}
+        ${c.unmatched_premise ? `<dt>Premise match</dt><dd>${esc(c.unmatched_premise)} → ${esc(c.suggested_premise)} ${c.master_data ? `<b>${esc(c.master_data.outcome)}</b> by ${esc(c.master_data.by)}` : '(awaiting steward)'}</dd>` : ''}
+        ${c.field_outcome ? `<dt>Field</dt><dd>${esc(c.field_outcome.outcome)} by ${esc(c.field_outcome.by)}</dd>` : ''}
+        ${c.finance ? `<dt>Finance</dt><dd>${esc(c.finance.outcome)} by ${esc(c.finance.by)}${c.finance.note ? ' — “' + esc(c.finance.note) + '”' : ''}</dd>` : ''}
+        ${c.integration_issue ? `<dt>Integration</dt><dd>${can('integration') ? '<a class="linkish" href="#/integration">' + esc(c.integration_issue.issue_id) + '</a>' : esc(c.integration_issue.issue_id)} ${esc(c.integration_issue.signature)} (${esc(c.integration_issue.status)})</dd>` : ''}
+        ${c.requires_regulatory ? `<dt>Regulatory</dt><dd>open ${esc(c.regulatory_crm_cases.join(', '))}</dd>` : ''}</dl></div></div>`;
+    const rel = c.related || { crm: [], gl: [] };
+    const related = `<div class="card"><div class="card-head"><h2>Related CRM &amp; GL</h2><span class="note">at scenario time</span></div><div class="card-body">
+        ${rel.crm.length ? `<div class="crm-list">${rel.crm.map(x => `<details><summary><span class="mono">${esc(x.case_id)}</span><b>${esc(x.subject)}</b><span class="muted">${esc(x.opened_at)} · ${esc(x.category)} · ${esc(x.status)}</span></summary><div class="crm-notes">${esc(x.notes) || '—'}</div></details>`).join('')}</div>` : '<p class="note">No CRM cases at scenario time.</p>'}
+        ${rel.gl.length ? `<table class="grid compact" style="margin-top:10px"><thead><tr><th>Journal</th><th>Bill</th><th>Period</th><th>Account</th><th class="r">Debit</th><th class="r">Credit</th></tr></thead><tbody>${rel.gl.map(g => `<tr><td class="mono">${esc(g.je_id)}/${esc(g.je_line)}</td><td class="mono">${esc(g.source_ref)}</td><td>${esc(g.accounting_period)} <span class="pill">${esc(g.period_status)}</span></td><td>${esc(g.gl_account)} ${esc(g.gl_account_name)}</td><td class="r num">${+g.debit ? fmtMoney(+g.debit) : ''}</td><td class="r num">${+g.credit ? fmtMoney(+g.credit) : ''}</td></tr>`).join('')}</tbody></table>` : '<p class="note">No GL lines for issued bills in this case.</p>'}</div></div>`;
+    const trail = `<div class="card"><div class="card-head"><h2>Case audit trail<span class="count">${(c.audit_trail || []).length} event(s)</span></h2></div>${feedTable((c.audit_trail || []).slice().reverse(), true)}</div>`;
+    return hdr + actionForm(c) + `<div class="grid2"><div>${invCard}</div><div>${activityPanel(c)}${facts}</div></div>` + options + plan + drafts + related + trail;
+  },
+};
+
+/* ---------- POC 1: back-scan / daily check (client-side detector, unchanged rules) ---------- */
+const plural2 = plural;
+SCREENS.backscan = {
+  async load() {
+    const meta = source.list.find(d => d.id === S.dsId);
+    const prev = state.lastDsId && state.lastDsId !== S.dsId ? source.cache.get(state.lastDsId) : null;
+    const d = await loadDataset(meta);
+    if (d.errors.length) throw new Error(`${meta.name} failed validation: ${d.errors.join('; ')}`);
+    if (!state.scanTouched || !state.scan) state.scan = defaultScanRange(d.ix);
+    if (prev && !prev.errors.length) state.banner = { kind: 'info', html: datasetDiff(prev, d) };
+    else if (state.lastDsId !== S.dsId) state.banner = d.warnings.length ? { kind: 'warn', html: `<b>Loaded with warnings:</b> ${d.warnings.map(esc).join(' · ')}` } : null;
+    state.lastDsId = S.dsId;
+    state.result = detect(d.ix, { asOf: state.asOf, scanStart: state.scan.scanStart, scanEnd: state.scan.scanEnd });
+    renderSourceLine();
+    prefetchOthers();
+    return null;
+  },
+  render() { return backscanHtml(); },
+};
+function prefetchOthers() {
+  (async () => { for (const m of source.list) if (!source.cache.has(m.id)) { try { await loadDataset(m); } catch (e) { /* shown when selected */ } } })();
+}
+function backscanHtml() {
+  const isBS = curSc() && curSc().kind === 'BACKSCAN';
+  const canSend = lvl('backscan') === 'A' && !S.offline;
+  const send = canSend ? (isBS ? '<button class="btn primary" data-action="send-backscan" type="button">Send findings to workflow</button>' : `<span class="note">To send findings to the workflow, switch the scenario to BACKSCAN_…</span>`) : '';
+  return head('Back-scan / Daily check', 'POC 1 detector over the full extracts · OMS × CC&amp;B × MDM', send) + `
+    <div class="card"><div class="card-body"><div class="controls-inner" style="padding:0">
+      <div class="ctl"><span class="ctl-label">Dataset</span><div class="seg" id="dsSeg">${source.list.map(m => `<button type="button" data-ds="${esc(m.id)}" aria-pressed="${m.id === S.dsId}">${esc(m.name)}</button>`).join('')}</div></div>
+      <div class="ctl"><span class="ctl-label">Mode</span><div class="seg" id="modeSeg"><button type="button" data-v="backscan" aria-pressed="${state.mode === 'backscan'}">Back-scan</button><button type="button" data-v="daily" aria-pressed="${state.mode === 'daily'}">Daily check</button></div></div>
+      <div class="ctl"><label class="ctl-label" for="asOf">As of</label><input type="date" id="asOf" value="${esc(state.asOf)}"${state.mode === 'daily' ? '' : ' disabled'}></div>
+      <div class="ctl"><label class="ctl-label" for="scanStart">Scan</label><input type="date" id="scanStart" value="${esc(state.scan.scanStart)}"><span class="muted">→</span><input type="date" id="scanEnd" value="${esc(state.scan.scanEnd)}"><button class="btn ghost sm" type="button" id="scanReset">Reset</button></div>
+      <label class="switch"><input type="checkbox" id="labelsToggle"${state.labels ? ' checked' : ''}><span class="track"></span><span>Presenter labels</span></label>
+      <div class="run-group"><button class="btn primary" id="runBtn" type="button">Run</button><span class="run-status" id="runStatus">${runStatusHtml()}</span></div>
+    </div></div></div>
+    <div id="banner">${bannerHtml()}</div><section class="kpis" id="kpis">${kpisHtml()}</section>
+    <div id="tab-results">${(state.mode === 'backscan' ? findingsCard(state.result) : dailyCard(state.result)) + unmatchedCard(state.result) + legendCard()}</div>`;
+}
+function runStatusHtml() {
+  const r = state.result, d = cur();
+  return r && d ? `<span class="ok">✓</span> ${plural(r.back.scanned, 'disconnect')} · ${d.files['mdm_daily_reads.csv'].rows.length.toLocaleString()} reads in <b class="num">${(r.elapsed != null ? r.elapsed : r.elapsedMs).toFixed(1)} ms</b>` : '';
+}
+function run() {
+  const d = cur(); if (!d || !d.ix) return;
+  const btn = $('#runBtn'); if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Scanning…'; }
+  setTimeout(() => {
+    state.result = detect(d.ix, { asOf: state.asOf, scanStart: state.scan.scanStart, scanEnd: state.scan.scanEnd });
+    state.result.elapsed = state.result.elapsedMs;
+    state.detail = null;
+    if (S.route.screen === 'backscan') { $('#view').innerHTML = backscanHtml(); renderDrawer(); }
+  }, 120);
+}
+function renderResults() { const el = $('#tab-results'); if (el) el.innerHTML = (state.mode === 'backscan' ? findingsCard(state.result) : dailyCard(state.result)) + unmatchedCard(state.result) + legendCard(); }
+function datasetDiff(from, to) {
+  const opts = { asOf: state.asOf, scanStart: state.scan.scanStart, scanEnd: state.scan.scanEnd };
+  const rf = detect(from.ix, opts), rt = detect(to.ix, opts);
+  const dF = rt.back.findings.length - rf.back.findings.length, dC = money(rt.back.totalCredit - rf.back.totalCredit), dH = rt.daily.holds.length - rf.daily.holds.length;
+  const word = (n, more, less) => (n > 0 ? `${n} ${more}` : n < 0 ? `${-n} ${less}` : 'no change in');
+  const nf = new Set(rf.back.findings.map(f => f.customer)), nt = new Set(rt.back.findings.map(f => f.customer));
+  const gone = [...nf].filter(n => !nt.has(n)), added = [...nt].filter(n => !nf.has(n));
+  let html = `<b>${esc(to.name)}</b> vs ${esc(from.name)}: ${word(dF, 'more', 'fewer')} finding${Math.abs(dF) === 1 ? '' : 's'}, ${dC === 0 ? 'no change in credit owed' : `${fmtMoney(Math.abs(dC))} ${dC > 0 ? 'more' : 'less'} credit owed`}, ${word(dH, 'more', 'fewer')} hold${Math.abs(dH) === 1 ? '' : 's'} (as of ${esc(state.asOf)}).`;
+  if (gone.length) html += ` No longer flagged: ${gone.map(esc).join(', ')}.`;
+  if (added.length) html += ` Newly flagged: ${added.map(esc).join(', ')}.`;
+  return html;
+}
+function bannerHtml() {
+  const b = state.banner; if (!b) return '';
+  return `<div class="banner ${b.kind === 'warn' ? 'warn' : ''}" role="status"><svg class="b-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div class="b-text">${b.html}</div><button class="b-close" data-action="dismiss-banner" aria-label="Dismiss">×</button></div>`;
+}
+function kpisHtml() {
+  const r = state.result; if (!r) return '';
+  const daily = state.mode === 'daily';
+  const scanned = daily ? r.daily.scanned : r.back.scanned, matched = daily ? r.daily.matched : r.back.matched;
+  const um = daily ? r.daily.unmatched : r.back.unmatched;
+  const umx = money(um.reduce((s, u) => s + (u.exposure ? u.exposure.total : 0), 0));
+  let flagged, fsub, credit, csub;
+  if (daily) {
+    flagged = new Set(r.daily.holds.map(h => h.accountId)).size; fsub = `${plural(r.daily.excluded.length, 'non-pay disconnect')} excluded`;
+    credit = money(r.daily.holds.reduce((s, h) => s + h.creditToDate, 0)); csub = 'already billed to held SAs';
+  } else {
+    flagged = new Set(r.back.findings.map(f => f.accountId)).size;
+    const by = s => r.back.findings.filter(f => f.severity === s).length;
+    fsub = ['HIGH', 'MEDIUM', 'LOW', 'REVIEW'].map(s => `${by(s)} ${s[0] + s.slice(1).toLowerCase()}`).join(' · ');
+    credit = r.back.totalCredit; csub = `across ${plural(r.back.findings.reduce((s, f) => s + f.a.billLines.filter(l => l.credit > 0).length, 0), 'bill')}`;
+  }
+  return [kpi('Disconnects scanned', scanned, daily ? `completed on/before ${state.asOf}` : 'completed OMS disconnects'),
+    kpi('Match rate', (scanned ? (matched / scanned) * 100 : 100).toFixed(1) + '%', `${matched} of ${scanned} matched via crosswalk`),
+    kpi(daily ? 'Accounts held' : 'Accounts flagged', flagged, fsub, flagged ? 'warn' : ''), kpi('Total credit owed', fmtMoney(credit), csub, 'emph'),
+    kpi('Unmatched disconnects', um.length, um.length ? `${fmtMoney(umx)} potential if linked` : 'all disconnects resolved'),
+    daily ? kpi('Holds recommended', r.daily.holds.length, r.daily.nextRun ? `before bill run ${r.daily.nextRun}` : 'before next bill run', r.daily.holds.length ? 'warn' : '')
+          : kpi('Holds recommended', '—', 'switch to Daily check', 'dim')].join('');
+}
+const FINDING_COLS = [
+  { k: 'account', l: 'Account', v: f => f.accountId }, { k: 'customer', l: 'Customer', v: f => f.customer }, { k: 'cls', l: 'Class', v: f => f.cls + f.tariff },
+  { k: 'severity', l: 'Severity', v: f => SEV_RANK[f.severity] * 1e7 + f.credit }, { k: 'bills', l: 'Bills affected', v: f => f.billsAffected, r: 1 },
+  { k: 'days', l: 'Post-disc. days', v: f => f.postDays, r: 1 }, { k: 'kwh', l: 'Phantom kWh', v: f => f.phantomKwh, r: 1 },
+  { k: 'credit', l: 'Credit owed', v: f => f.credit, r: 1 }, { k: 'cause', l: 'Probable cause', v: f => f.cause }, { k: 'rules', l: 'Rules fired', v: f => f.rules.join(',') },
+];
+function filteredFindings() {
+  const list = state.result.back.findings.filter(f => (state.sevFilter === 'ALL' || f.severity === state.sevFilter) && (state.causeFilter === 'ALL' || f.causeCodes.includes(state.causeFilter)));
+  const col = FINDING_COLS.find(c => c.k === state.sort.key) || FINDING_COLS[3];
+  return list.slice().sort((a, b) => { const x = col.v(a), y = col.v(b); return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y))) * state.sort.dir; });
+}
+function findingsCard(r) {
+  const list = filteredFindings();
+  const causes = [...new Set(r.back.findings.flatMap(f => f.causeCodes))];
+  const opt = (v, l, cv) => `<option value="${esc(v)}"${v === cv ? ' selected' : ''}>${esc(l)}</option>`;
+  const headRow = FINDING_COLS.map(c => { const on = state.sort.key === c.k; return `<th class="sortable${c.r ? ' r' : ''}" data-sort="${c.k}">${c.l}${on ? `<span class="arrow">${state.sort.dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`; }).join('');
+  const rows = list.map(f => `<tr class="clickable" tabindex="0" data-open="finding" data-key="${esc(f.key)}">
+      <td><span class="mono">${esc(f.accountId)}</span><div class="sub-line mono">${esc(f.saId)}</div></td><td>${esc(f.customer)}${tagFor(f.accountId)}</td>
+      <td style="white-space:nowrap">${esc(f.cls)}<div class="sub-line">${esc(f.tariff)}</div></td><td>${sevBadge(f.severity)}</td><td class="r num">${f.billsAffected}</td><td class="r num">${f.postDays}</td>
+      <td class="r num">${fmtKwh(f.phantomKwh)}${f.actualAfterKwh ? `<div class="sub-line">${fmtKwh(f.actualAfterKwh)} kWh actual, unbilled</div>` : ''}</td>
+      <td class="r num"><b>${fmtMoney(f.credit)}</b></td><td style="min-width:220px">${esc(f.cause)}</td><td>${ruleChips(f.rules)}</td></tr>`).join('');
+  return `<div class="card"><div class="card-head"><h2>Back-scan findings<span class="count">${list.length} of ${r.back.findings.length}</span></h2>
+      <div class="tools"><div class="filters"><label for="sevFilter">Severity</label><select id="sevFilter">${opt('ALL', 'All', state.sevFilter)}${['HIGH', 'MEDIUM', 'LOW', 'REVIEW'].map(s => opt(s, s, state.sevFilter)).join('')}</select>
+        <label for="causeFilter">Cause</label><select id="causeFilter">${opt('ALL', 'All', state.causeFilter)}${causes.map(c => opt(c, CAUSE_FILTER_LABEL[c] || c, state.causeFilter)).join('')}</select></div>
+        <button class="btn sm" data-action="export-findings">Export CSV</button></div></div>
+    ${list.length ? `<div class="table-wrap"><table class="grid"><thead><tr>${headRow}</tr></thead><tbody>${rows}<tr class="total"><td colspan="7">Total (filtered)</td><td class="r num">${fmtMoney(money(list.reduce((s, f) => s + f.credit, 0)))}</td><td colspan="2"></td></tr></tbody></table></div>` : '<div class="empty">No findings match the current filters.</div>'}
+    <div class="card-foot">Scan range ${esc(r.scan.scanStart)} → ${esc(r.scan.scanEnd)} · issued bills (FINAL / DISPUTED) only. Click a row for the timeline, calculation, evidence and related context.</div></div>`;
+}
+function dailyCard(r) {
+  const d = r.daily;
+  const rows = d.holds.map(h => `<tr class="clickable" tabindex="0" data-open="hold" data-key="${esc(h.key)}"><td><span class="mono">${esc(h.accountId)}</span><div class="sub-line mono">${esc(h.saId)}</div></td>
+    <td>${esc(h.customer)}${tagFor(h.accountId)}</td><td style="white-space:nowrap">${esc(h.cls)}<div class="sub-line">${esc(h.tariff)}</div></td><td class="mono">${esc(h.wo.wo_id)}<div class="sub-line">${esc(h.wo.wo_subtype)}</div></td>
+    <td class="num">${esc(h.wo.completed_at)}</td><td class="r num">${h.daysSince}</td><td>${stBadge(h.msg)}${h.msg ? `<div class="sub-line">${esc(h.msg.msg_id)}${h.msg.processed_at ? ' · processed ' + esc(h.msg.processed_at) : ''}</div>` : ''}</td>
+    <td>${h.todos.length ? h.todos.map(t => `<span class="mono">${esc(t.todo_id)}</span> ${esc(t.status)}<div class="sub-line">${t.assigned_to ? esc(t.assigned_to) : 'unassigned'}</div>`).join('') : '<span class="faint">none</span>'}</td>
+    <td class="num">${esc(h.nextRun || '—')}</td><td>${sevBadge('HOLD')}<div class="sub-line">Hold before next bill run</div></td></tr>`).join('');
+  const excluded = d.excluded.map(h => `${esc(h.customer)}${tagFor(h.accountId)} (${esc(h.wo.wo_id)})`).join(', ');
+  return `<div class="card"><div class="card-head"><h2>Bill holds recommended — as of ${esc(d.asOf)}<span class="count">${d.holds.length}</span></h2><div class="tools"><span class="note">Next expected bill run: <b>${esc(d.nextRun || '—')}</b></span><button class="btn sm" data-action="export-holds">Export CSV</button></div></div>
+    ${d.holds.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Account</th><th>Customer</th><th>Class</th><th>Work order</th><th>Disconnected</th><th class="r">Days since</th><th>Integration</th><th>Open To Do</th><th>Next bill run</th><th>Recommendation</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">No completed disconnects with an SA still active as of ${esc(d.asOf)}.</div>`}
+    <div class="card-foot">Rule: COMPLETED DISCONNECT on or before ${esc(d.asOf)} (excluding NONPAY) whose SA is still active at 23:59.${excluded ? `<br>Excluded as non-pay: ${excluded}.` : ''}</div></div>`;
+}
+function unmatchedCard(r) {
+  const list = state.mode === 'daily' ? r.daily.unmatched : r.back.unmatched;
+  const rows = list.map(u => `<tr class="clickable" tabindex="0" data-open="unmatched" data-key="${esc(u.wo.wo_id)}"><td class="mono">${esc(u.wo.wo_id)}${u.exposure ? tagFor(u.exposure.a.sa.account_id) : ''}<div class="sub-line">${esc(u.wo.wo_subtype)} · ${esc(u.wo.completed_at)}</div></td>
+    <td class="mono"><b>${esc(u.recorded)}</b></td><td>${u.msg ? `${stBadge(u.msg)} <span class="mono">${esc(u.msg.msg_id)}</span><div class="sub-line">${esc(u.msg.error_message || '—')}</div>` : '<span class="faint">no message</span>'}</td>
+    <td>${u.suggestion ? `<span class="mono"><b>${esc(u.suggestion.premise)}</b></span>${u.exposure && u.exposure.a.account ? ' · ' + esc(u.exposure.a.account.customer_name) : ''}<div class="sub-line">${esc(u.suggestion.note)}${u.suggestions.length > 1 ? ` · ${u.suggestions.length - 1} other candidate(s)` : ''}</div>` : '<span class="faint">no near match</span>'}</td>
+    <td class="r num">${u.exposure ? `<b>${fmtMoney(u.exposure.total)}</b><div class="sub-line">consumption ${fmtMoney(u.exposure.consCredit)} + fixed ${fmtMoney(u.exposure.fixedCredit)}</div>` : '—'}</td></tr>`).join('');
+  return `<div class="card"><div class="card-head"><h2>Unmatched disconnects<span class="count">${list.length}</span></h2><div class="tools"><span class="note">C3 — ID mismatch</span></div></div>
+    ${list.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Work order</th><th>Premise ID as recorded</th><th>Integration error</th><th>Suggested match</th><th class="r">Potential exposure if linked</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">Every completed disconnect resolved through ref_id_crosswalk.</div>'}</div>`;
+}
+function legendCard() {
+  return `<div class="card"><details class="legend"><summary>Detection rules, causes and severity</summary><div class="legend-grid"><dl>${Object.entries(RULES).map(([k, v]) => `<dt><span class="rule">${k}</span></dt><dd>${esc(v)}</dd>`).join('')}
+      <dt>Severity</dt><dd>HIGH: credit ≥ $250, or ≥ 2 bills affected, or an affected bill is DISPUTED · MEDIUM: $25–$249.99 · LOW: &lt; $25 · REVIEW: $0 credit but RV fired.</dd></dl>
+      <dl>${['C1', 'C2', 'C3', 'C6', 'C4 + C5', 'TAMPER'].map(k => `<dt>${esc(CAUSE_FILTER_LABEL[k])}</dt><dd>${esc(CAUSE_TEXT[k])}</dd>`).join('')}</dl></div></details></div>`;
+}
+
+/* ---------- POC 1 detail drawer ---------- */
+function findCtx(kind, key) {
+  const r = state.result;
+  if (kind === 'finding') return { kind, item: r.back.findings.find(f => f.key === key) };
+  if (kind === 'hold') return { kind, item: r.daily.holds.find(h => h.key === key) };
+  if (kind === 'unmatched') return { kind, item: r.back.unmatched.find(u => u.wo.wo_id === key) };
+  return null;
+}
+function renderDrawer() {
+  const dr = $('#drawer'), scrim = $('#scrim'), ctx = state.detail;
+  if (!ctx || !ctx.item || !state.result || !cur()) { dr.hidden = true; scrim.hidden = true; document.body.classList.remove('no-scroll'); return; }
+  const ix = cur().ix, it = ctx.item;
+  let eyebrow, title, meta, badge, action, a, mini;
+  if (ctx.kind === 'unmatched') {
+    a = it.exposure ? it.exposure.a : null;
+    eyebrow = `Unmatched disconnect · ${it.wo.wo_id}`;
+    title = a && a.account ? `${esc(a.account.customer_name)}${tagFor(a.sa.account_id)} <span class="faint" style="font-weight:500">(if linked)</span>` : esc(it.recorded);
+    meta = `OMS premise <b class="mono">${esc(it.recorded)}</b> → no crosswalk row` + (it.suggestion ? ` · suggested <b class="mono">${esc(it.suggestion.premise)}</b> (${esc(it.suggestion.note)})` : '');
+    badge = '<span class="badge sev-C3">C3</span>';
+    action = it.suggestion ? `Correct the premise on ${it.wo.wo_id} from ${it.recorded} to ${it.suggestion.premise} (or add a crosswalk alias) and re-send the integration message. If confirmed: place bill hold on ${a ? a.sa.sa_id : 'the SA'}, process the stop effective ${dateOf(it.wo.completed_at)} and credit ${fmtMoney(it.exposure ? it.exposure.total : 0)}.` : `Investigate premise ${it.recorded} with OMS.`;
+    mini = [['Potential exposure', fmtMoney(it.exposure ? it.exposure.total : 0)], ['Consumption', fmtMoney(it.exposure ? it.exposure.consCredit : 0)], ['Fixed charges', fmtMoney(it.exposure ? it.exposure.fixedCredit : 0)], ['Post-disconnect days', a ? a.postDays : 0]];
+  } else {
+    a = it.a;
+    eyebrow = (ctx.kind === 'finding' ? 'Back-scan finding' : `Daily check · as of ${state.result.daily.asOf}`) + ` · ${a.wo.wo_id}`;
+    title = `${esc(a.account ? a.account.customer_name : a.sa.account_id)}${tagFor(a.sa.account_id)}`;
+    meta = `<span class="mono">${esc(a.sa.account_id)}</span> · <span class="mono">${esc(a.sa.sa_id)}</span> · ${esc(a.account ? a.account.customer_class : '')} · ${esc(a.sa.tariff_code)} · ${esc(a.sa.premise_address)} · premise <span class="mono">${esc(a.wo.oms_premise_id)}</span>`;
+    badge = sevBadge(ctx.kind === 'finding' ? it.severity : 'HOLD');
+    action = it.action;
+    mini = [[ctx.kind === 'finding' ? 'Credit owed' : 'Billed post-disconnect so far', fmtMoney(a.credit)], ['Phantom kWh', fmtKwh(a.phantomKwh)], ['Post-disconnect days', a.postDays], ['Bills affected', a.billsAffected]];
+    if (a.unbilledKwh + a.billedActualKwh > 0) mini.push(['Actual kWh after disconnect', fmtKwh(a.unbilledKwh + a.billedActualKwh)]);
+    if (ctx.kind === 'hold') mini.push(['Days since disconnect', it.daysSince]);
+  }
+  dr.innerHTML = `<div class="drawer-head"><div style="min-width:0"><div class="eyebrow">${esc(eyebrow)}</div><h2 id="drawerTitle">${title}</h2><div class="meta">${meta}</div></div>
+      <div style="margin-left:auto;display:flex;gap:10px;align-items:center">${badge}<button class="close" data-action="close-drawer" aria-label="Close">×</button></div></div>
+    <div class="drawer-body"><div class="action-box"><strong>Recommended action</strong><p>${esc(action)}</p></div>
+      <div class="mini">${mini.map(([l, v]) => `<div><span>${esc(l)}</span><b>${esc(v)}</b></div>`).join('')}</div>
+      ${a ? `<h3>Timeline</h3><div class="tl-card">${timelineSVG(ix, a)}${timelineLegend()}</div><h3>Calculation</h3>${calcTable(a)}<h3>Rules fired &amp; probable cause</h3>${rulesBlock(a, ctx)}` : ''}
+      <h3>Evidence</h3>${evidenceTable(ix, ctx, a)}${a ? `<h3>Related context — CRM</h3>${crmBlock(ix, a)}<h3>Related context — GL</h3>${glBlock(ix, a)}` : ''}</div>`;
+  dr.hidden = false; scrim.hidden = false; document.body.classList.add('no-scroll');
+  const close = dr.querySelector('.close'); if (close && !dr.contains(document.activeElement)) close.focus();
+}
+function citedBills(ix, a) {
+  const ids = new Set(a.billLines.map(l => l.bill.bill_id));
+  for (const sa of a.res.spSas) for (const b of ix.billsBySa[sa.sa_id] || []) if (b.period_start <= a.win.disconnectDate && a.win.disconnectDate <= b.period_end) ids.add(b.bill_id);
+  return a.res.spSas.flatMap(sa => ix.billsBySa[sa.sa_id] || []).filter(b => ids.has(b.bill_id));
+}
+function timelineSVG(ix, a) {
+  const bills = a.res.spSas.flatMap(sa => ix.billsBySa[sa.sa_id] || []).slice().sort((p, q) => p.period_start.localeCompare(q.period_start));
+  const markerDates = [a.wo.completed_at, ...bills.map(b => b.bill_run_at), a.sa.stop_processed_at, a.win.reconnect && a.win.reconnect.completed_at].filter(Boolean).map(dateOf);
+  const D0 = ix.minRead, Dend = markerDates.reduce(maxStr, ix.maxRead);
+  const NDAYS = daysBetween(D0, Dend) + 2;
+  const W = 940, ML = 46, MR = 12, MT = 60, PH = 176, MB = 26, H = MT + PH + MB;
+  const dx = (W - ML - MR) / NDAYS;
+  const xd = d => ML + daysBetween(D0, d) * dx;
+  const xt = ts => xd(dateOf(ts)) + ((+ts.slice(11, 13)) * 60 + (+ts.slice(14, 16))) / 1440 * dx;
+  const reads = dayRange(ix.minRead, ix.maxRead).map(d => (ix.readsByMeter[a.xw.mdm_meter_id] || {})[d]).filter(Boolean);
+  const top = niceCeil(Math.max(1, ...reads.map(r => r._kwh)));
+  const y0 = MT + PH, y = k => y0 - (k / top) * (PH - 30);
+  const out = [`<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" class="hatch-line"/></pattern></defs>`];
+  const hit = new Set(a.billLines.map(l => l.bill.bill_id));
+  bills.forEach((b, i) => {
+    if (b.period_end < D0) return;
+    const s = maxStr(b.period_start, D0), x = xd(s), w = (daysBetween(s, b.period_end) + 1) * dx;
+    out.push(`<rect x="${x.toFixed(1)}" y="${MT}" width="${w.toFixed(1)}" height="${PH}" class="${i % 2 ? 'band-b' : 'band-a'}${hit.has(b.bill_id) ? ' band-hit' : ''}"><title>${esc(b.bill_id)} · ${b.period_start} → ${b.period_end} · ${b.bill_status} · ${fmtMoney(num(b.total_amount))}</title></rect>`);
+    const mon = new Date(toUTC(b.period_start)).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+    out.push(`<text x="${(x + 4).toFixed(1)}" y="${MT + 12}" class="t-strong">${mon} bill${b.bill_type === 'FINAL' ? ' (final)' : ''}${b.bill_status === 'DISPUTED' ? ' · DISPUTED' : ''}</text><text x="${(x + 4).toFixed(1)}" y="${MT + 24}">${esc(b.bill_id)}</text>`);
+  });
+  const wEnd = a.win.end || ix.maxRead;
+  if (a.win.start <= wEnd) {
+    const x = xd(a.win.start), w = (daysBetween(a.win.start, wEnd) + 1) * dx;
+    out.push(`<rect x="${x.toFixed(1)}" y="${MT}" width="${w.toFixed(1)}" height="${PH}" fill="url(#hatch)"><title>Post-disconnect window</title></rect><line x1="${x.toFixed(1)}" x2="${(x + w).toFixed(1)}" y1="${y0 + 1}" y2="${y0 + 1}" class="win-edge" stroke-width="3"/>`);
+  }
+  [0, top / 2, top].forEach(k => out.push(`<line x1="${ML}" x2="${W - MR}" y1="${y(k).toFixed(1)}" y2="${y(k).toFixed(1)}" class="grid-l"/><text x="${ML - 6}" y="${(y(k) + 3.5).toFixed(1)}" text-anchor="end">${fmtKwh(k)}</text>`));
+  out.push(`<text x="6" y="${MT - 6}">kWh/day</text>`);
+  for (const r of reads) {
+    const x = xd(r.read_date) + dx * 0.14, w = Math.max(1, dx * 0.72);
+    const t = `<title>${r.read_date} · ${fmtKwh(r._kwh)} kWh · ${r.read_quality} · ${esc(r.read_id)}</title>`;
+    out.push(r._kwh > 0 ? `<rect x="${x.toFixed(1)}" y="${y(r._kwh).toFixed(1)}" width="${w.toFixed(1)}" height="${(y0 - y(r._kwh)).toFixed(1)}" class="${r.read_quality === 'ESTIMATED' ? 'bar-e' : 'bar-a'}">${t}</rect>` : `<rect x="${x.toFixed(1)}" y="${y0 - 2}" width="${w.toFixed(1)}" height="2" class="bar-z">${t}</rect>`);
+  }
+  out.push(`<line x1="${ML}" x2="${W - MR}" y1="${y0}" y2="${y0}" class="axis"/>`);
+  for (let d = D0.slice(0, 8) + '01'; d <= Dend; d = addDays(d.slice(0, 8) + '01', 32).slice(0, 8) + '01') {
+    for (const day of [d, d.slice(0, 8) + '15']) {
+      if (day < D0 || day > Dend) continue;
+      const x = xd(day), st = day.endsWith('-01');
+      out.push(`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${y0}" y2="${y0 + (st ? 5 : 3)}" class="axis"/><text x="${(x + 2).toFixed(1)}" y="${y0 + 17}"${st ? '' : ' opacity=".7"'}>${st ? new Date(toUTC(day)).toLocaleString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : '15'}</text>`);
+    }
+  }
+  const marks = [{ ts: a.wo.completed_at, c: 'disc', l: `Disconnect ${a.wo.completed_at.slice(5)}` }];
+  if (a.win.reconnect) marks.push({ ts: a.win.reconnect.completed_at, c: 'rec', l: `Reconnect ${a.win.reconnect.completed_at.slice(5)}` });
+  bills.forEach(b => marks.push({ ts: b.bill_run_at, c: 'bill', l: `Bill run ${b.bill_run_at.slice(5, 10)}` }));
+  if (a.sa.stop_processed_at) marks.push({ ts: a.sa.stop_processed_at, c: 'stop', l: `Stop processed ${a.sa.stop_processed_at.slice(5)}` });
+  marks.sort((p, q) => p.ts.localeCompare(q.ts));
+  const rowY = [13, 29, 45], placed = rowY.map(() => []);
+  for (const m of marks) {
+    const x = xt(m.ts); if (x < ML || x > W - MR) continue;
+    const tw = m.l.length * 5.6 + 8, ae = x + tw > W - MR, left = ae ? x - tw : x, right = left + tw;
+    let row = placed.findIndex(iv => iv.every(([l, r]) => right < l || left > r));
+    if (row < 0) row = placed.reduce((best, iv, i) => (iv.length < placed[best].length ? i : best), 0);
+    placed[row].push([left, right]);
+    out.push(`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${rowY[row] + 4}" y2="${y0}" class="mk mk-${m.c}"><title>${esc(m.l)}</title></line><text x="${(ae ? x - 3 : x + 3).toFixed(1)}" y="${rowY[row]}" text-anchor="${ae ? 'end' : 'start'}" class="lb-${m.c}" font-weight="600">${esc(m.l)}</text>`);
+  }
+  return `<div class="tl"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily kWh timeline">${out.join('')}</svg></div>`;
+}
+function niceCeil(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+function timelineLegend() {
+  return `<div class="tl-legend"><span><i style="background:var(--actual)"></i>ACTUAL read</span><span><i style="background:var(--est)"></i>ESTIMATED read</span><span><i style="background:var(--zero);height:4px;vertical-align:2px"></i>Zero read</span>
+    <span><i style="background:repeating-linear-gradient(45deg,color-mix(in srgb,var(--win) 35%,transparent) 0 2px,transparent 2px 6px);border:1px solid color-mix(in srgb,var(--win) 50%,transparent)"></i>Post-disconnect window</span>
+    <span><i style="border:1px dashed var(--high);background:transparent"></i>Bill overlapping window</span><span><i class="line" style="color:var(--m-disc)"></i>Disconnect</span><span><i class="line" style="color:var(--m-rec)"></i>Reconnect</span>
+    <span><i class="line dash" style="color:var(--m-bill)"></i>Bill run</span><span><i class="line" style="color:var(--m-stop)"></i>Stop processed</span></div>`;
+}
+function calcTable(a) {
+  if (!a.billLines.length) return `<div class="card"><div class="card-body note">No issued bill covers a post-disconnect day (window ${a.win.start} → ${a.win.end || 'open'}, examined ${a.first} → ${a.last}); nothing to credit.${a.unbilledKwh ? `<br><b>${fmtKwh(a.unbilledKwh)} kWh</b> of ACTUAL consumption recorded on ${a.unbilledDays} unbilled day(s) (${a.unbilledFrom} → ${a.unbilledTo}) — not billed, no credit; field check required.` : ''}</div></div>`;
+  const rows = a.billLines.map(l => `<tr><td class="mono">${esc(l.bill.bill_id)}<div class="sub-line">${esc(l.bill.bill_type)} · ${esc(l.bill.bill_status)} · run ${esc(l.bill.bill_run_at)}</div></td>
+    <td class="num">${l.bill.period_start} → ${l.bill.period_end}<div class="sub-line">post-disconnect ${l.from} → ${l.to}</div></td><td class="r num">${l.overlapDays}</td>
+    <td class="r num">${fmtKwh(l.phantomKwh)} × $${l.rate.toFixed(2)}<div class="sub-line">= ${fmtMoney(l.consCredit)}</div></td><td class="r num">${l.overlapDays} × $${l.fixedDaily.toFixed(2)}<div class="sub-line">= ${fmtMoney(l.fixedAmt)}</div></td>
+    <td>${l.fixedCredit ? `Credited (${esc(a.wo.wo_subtype)})` : 'Retained per tariff'}</td><td class="r num"><b>${fmtMoney(l.credit)}</b></td></tr>`).join('');
+  const t = a.billLines[0].tariff;
+  return `<div class="card"><div class="table-wrap"><table class="grid compact"><thead><tr><th>Bill</th><th>Period billed</th><th class="r">Post-disc. days</th><th class="r">Consumption credit</th><th class="r">Fixed charges</th><th>Fixed treatment</th><th class="r">Bill credit</th></tr></thead>
+    <tbody>${rows}<tr class="total"><td colspan="3">Total</td><td class="r num">${fmtMoney(a.consCredit)}</td><td class="r num">${fmtMoney(a.fixedCredit + a.fixedRetained)}</td><td>${a.fixedRetained ? `${fmtMoney(a.fixedRetained)} retained` : `${fmtMoney(a.fixedCredit)} credited`}</td><td class="r num">${fmtMoney(a.credit)}</td></tr></tbody></table></div>
+    ${a.unbilledKwh || a.billedActualKwh ? `<div class="card-foot">${fmtKwh(a.unbilledKwh + a.billedActualKwh)} kWh of ACTUAL consumption recorded after the disconnect — not credited; field check required.</div>` : ''}
+    ${t ? `<div class="card-foot">Tariff ${esc(t.tariff_code)}: $${num(t.rate_per_kwh).toFixed(2)}/kWh, $${num(t.fixed_daily_charge).toFixed(2)}/day · fixed stops on stop-service: ${esc(t.fixed_stops_on_stop_service)} · continues on non-pay: ${esc(t.fixed_continues_on_nonpay)}</div>` : ''}</div>`;
+}
+function rulesBlock(a, ctx) {
+  const rules = a.rules.map(r => `<div><span class="rule">${r}</span> ${esc(RULES[r])}</div>`).join('') || '<div class="note">No billing rule has fired yet.</div>';
+  const causes = (a.causes || []).map(c => `<div><b>${esc(c.label)}</b><div class="note">${esc(CAUSE_TEXT[c.code] || '')}</div></div>`).join('');
+  const hold = ctx.kind === 'hold' ? `<div><span class="rule">D1</span> Daily check: ${esc(a.wo.wo_subtype)} disconnect with SA ${esc(ctx.item.saNote)} at the end of ${esc(state.result.daily.asOf)}.</div>` : '';
+  return `<div class="rule-list">${rules}${hold}${causes}</div>`;
+}
+function evidenceTable(ix, ctx, a) {
+  const ev = [], add = (sys, file, id, value, q) => ev.push({ sys, file, id, value, q: q || id });
+  const w = ctx.kind === 'unmatched' ? ctx.item.wo : a.wo;
+  add('OMS', 'oms_work_orders.csv', w.wo_id, `${w.wo_type} / ${w.wo_subtype} · ${w.status} ${w.completed_at} · premise ${w.oms_premise_id} · ${w.technician_id} · “${w.notes}”`);
+  if (a && a.win.reconnect) add('OMS', 'oms_work_orders.csv', a.win.reconnect.wo_id, `RECONNECT / ${a.win.reconnect.wo_subtype} · COMPLETED ${a.win.reconnect.completed_at} → window ends ${a.win.end}`);
+  const msg = ctx.kind === 'unmatched' ? ctx.item.msg : a.msg;
+  if (msg) add('INT', 'integration_message_log.csv', msg.msg_id, `${msg.status} · received ${msg.received_at} · processed ${msg.processed_at || '—'} · retries ${msg.retry_count}${msg.error_message ? ` · “${msg.error_message}”` : ''}`);
+  else add('INT', 'integration_message_log.csv', '—', `No message for ${w.wo_id}`, w.wo_id);
+  for (const t of (a ? a.todos : []) || []) add('CCB', 'ccb_todo_entries.csv', t.todo_id, `${t.todo_type} · ${t.status} · ${t.assigned_to ? 'assigned ' + t.assigned_to : 'unassigned'} · created ${t.created_at} · “${t.message}”`);
+  if (ctx.kind === 'unmatched') add('XWALK', 'ref_id_crosswalk.csv', ctx.item.recorded, `No row for ${ctx.item.recorded}`);
+  if (a) {
+    add('XWALK', 'ref_id_crosswalk.csv', a.xw.oms_premise_id, `${a.xw.oms_premise_id} → ${a.xw.ccb_sp_id} / ${a.xw.mdm_meter_id}${ctx.kind === 'unmatched' ? ' (suggested match)' : ''}`);
+    const s = a.sa;
+    add('CCB', 'ccb_service_agreements.csv', s.sa_id, `SA ${s.sa_status} · ${s.ccb_sp_id} · ${s.tariff_code} · start ${s.start_date} · stop ${s.stop_date || '—'} · stop processed ${s.stop_processed_at || '—'}`);
+    if (a.account) add('CCB', 'ccb_accounts.csv', a.account.account_id, `${a.account.customer_name} · ${a.account.customer_class} · ${a.account.account_status}`);
+    const t = ix.tariff[s.tariff_code];
+    if (t) add('CCB', 'ccb_tariffs.csv', t.tariff_code, `$${num(t.rate_per_kwh).toFixed(2)}/kWh · $${num(t.fixed_daily_charge).toFixed(2)}/day`);
+    for (const b of citedBills(ix, a)) add('CCB', 'ccb_bill_segments.csv', b.bill_id, `${b.bill_type} · ${b.period_start} → ${b.period_end} · ${fmtKwh(num(b.kwh_billed))} kWh (${b.usage_quality}) · ${fmtMoney(num(b.total_amount))} · ${b.bill_status} · run ${b.bill_run_at}`);
+    if (a.meter) add('MDM', 'mdm_meters.csv', a.meter.mdm_meter_id, `${a.meter.meter_type} · ${a.meter.connection_state} since ${a.meter.connection_state_updated_at}`);
+    const rs = a.readSummary;
+    if (rs) add('MDM', 'mdm_daily_reads.csv', `${rs.first.read_id} … ${rs.last.read_id}`, `${a.xw.mdm_meter_id} · ${rs.first.read_date} → ${rs.last.read_date} · ${rs.estCount} ESTIMATED (${fmtKwh(rs.estKwh)} kWh), ${rs.actCount} ACTUAL (${fmtKwh(rs.actKwh)} kWh)`, a.xw.mdm_meter_id);
+  }
+  const SN = { OMS: 'OMS', XWALK: 'Master data', CCB: 'CC&B', MDM: 'MDM', INT: 'Integration' };
+  return `<div class="card"><div class="table-wrap"><table class="grid compact"><thead><tr><th>System</th><th>File</th><th>Record</th><th>Value</th></tr></thead><tbody>
+    ${ev.map(e => `<tr><td><span class="sys sys-${e.sys}">${esc(SN[e.sys])}</span></td><td class="mono" style="white-space:nowrap">${esc(e.file)}</td><td class="mono" style="white-space:nowrap">${e.id === '—' || !can('explorer') ? esc(e.id) : `<button class="linkish mono" data-goto-file="${esc(e.file)}" data-goto-q="${esc(e.q)}">${esc(e.id)}</button>`}</td><td>${esc(e.value)}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+function crmBlock(ix, a) {
+  const cases = (ix.crmByAccount[a.sa.account_id] || []).slice().sort((p, q) => p.opened_at.localeCompare(q.opened_at));
+  if (!cases.length) return '<div class="card"><div class="card-body note">No CRM cases for this account.</div></div>';
+  return `<div class="crm-list">${cases.map(c => `<details><summary><span class="mono">${esc(c.case_id)}</span><b>${esc(c.subject)}</b><span class="muted">${esc(c.opened_at)} · ${esc(c.category)} · ${esc(c.status)}</span></summary><div class="crm-notes">${esc(c.notes) || '—'}</div></details>`).join('')}</div>`;
+}
+function glBlock(ix, a) {
+  const lines = citedBills(ix, a).flatMap(b => (ix.glByRef[b.bill_id] || []).map(g => ({ g, b })));
+  if (!lines.length) return '<div class="card"><div class="card-body note">No GL journal lines for the cited bills.</div></div>';
+  return `<div class="card"><div class="table-wrap"><table class="grid compact"><thead><tr><th>Journal</th><th>Bill</th><th>Period</th><th>Status</th><th>Account</th><th class="r">Debit</th><th class="r">Credit</th></tr></thead><tbody>
+    ${lines.map(({ g, b }) => { const p = ix.periodByKey[g.accounting_period]; return `<tr><td class="mono">${esc(g.je_id)}/${esc(g.je_line)}</td><td class="mono">${esc(b.bill_id)}</td><td>${esc(g.accounting_period)}</td><td>${p ? esc(p.status) : '—'}</td><td>${esc(g.gl_account)} ${esc(g.gl_account_name)}</td><td class="r num">${num(g.debit) ? fmtMoney(num(g.debit)) : ''}</td><td class="r num">${num(g.credit) ? fmtMoney(num(g.credit)) : ''}</td></tr>`; }).join('')}</tbody></table></div></div>`;
+}
+
+/* ---------- Data Explorer (Base / Sandbox) ---------- */
+const PAGE_SIZE = 100;
+SCREENS.explorer = {
+  async load() {
+    const meta = source.list.find(d => d.id === S.dsId);
+    await loadDataset(meta);
+    S.sandbox = state.explorer.mode === 'sandbox' && !S.offline ? await api('/api/sandbox') : null;
+    renderSourceLine();
+    return null;
+  },
+  render() { return explorerHtml(); },
+};
+function explorerTable(d) {
+  const file = state.explorer.file;
+  const base = d.files[file] || { headers: [], rows: [] };
+  if (!S.sandbox) return { headers: base.headers, rows: base.rows, ov: new Map() };
+  const ovs = S.sandbox.overlays.filter(o => o.file === file);
+  const headers = base.headers.length ? base.headers.slice() : [...new Set(ovs.flatMap(o => Object.keys(o.row)))];
+  const kf = { 'oms_work_orders.csv': 'wo_id', 'ccb_service_agreements.csv': 'sa_id', 'ccb_bill_segments.csv': 'bill_id', 'mdm_daily_reads.csv': 'read_id', 'ccb_todo_entries.csv': 'todo_id', 'crm_cases.csv': 'case_id', 'integration_message_log.csv': 'msg_id', sandbox_credit_memos: 'memo_id' }[file];
+  const rows = base.rows.slice(), ov = new Map();
+  for (const o of ovs) {
+    const i = kf ? rows.findIndex(r => r[kf] === o.key) : -1;
+    const merged = Object.assign({}, i >= 0 ? rows[i] : {}, o.row);
+    for (const k of Object.keys(o.row)) if (!headers.includes(k)) headers.push(k);
+    if (i >= 0) rows[i] = merged; else rows.push(merged);
+    ov.set(merged, o);
+  }
+  return { headers, rows, ov };
+}
+function explorerHtml() {
+  const d = cur();
+  const files = FILE_NAMES.filter(n => d.files[n]).concat(S.sandbox ? ['sandbox_credit_memos'] : []);
+  if (!files.includes(state.explorer.file)) state.explorer.file = files[0];
+  const t = explorerTable(d);
+  const terms = state.explorer.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = terms.length ? t.rows.filter(r => { const s = t.headers.map(h => r[h]).join(' ').toLowerCase(); return terms.every(x => s.includes(x)); }) : t.rows;
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  state.explorer.page = Math.min(state.explorer.page, pages - 1);
+  const p0 = state.explorer.page * PAGE_SIZE, view = rows.slice(p0, p0 + PAGE_SIZE);
+  const sandbox = !!S.sandbox, nOv = sandbox ? S.sandbox.overlays.length : 0;
+  const body = view.map(r => { const o = t.ov.get(r); return `<tr class="${o ? 'ov-row' : ''}">${sandbox ? `<td class="mono" style="white-space:nowrap">${o ? esc(o.overlay_id) + '<div class="sub-line">' + esc(o.case_id) + ' · ' + esc(o.step) + '</div>' : ''}</td>` : ''}${t.headers.map(h => `<td>${r[h] === '' || r[h] == null ? '<span class="faint">—</span>' : esc(r[h])}</td>`).join('')}</tr>`; }).join('');
+  const SN = { OMS: 'OMS', CCB: 'CC&B', MDM: 'MDM', XWALK: 'Master data', INT: 'Integration', CRM: 'CRM', GL: 'GL', KEY: 'Test oracle' };
+  return head('Data Explorer', `${esc(curDs() ? curDs().name : '')} · read-only source files${sandbox ? ' + sandbox overlays for ' + esc(S.scId) : ''}`) + `
+    <div class="card"><div class="card-head"><div class="explorer-tools">
+        <div class="seg" id="sbxSeg"><button type="button" data-sbx="base" aria-pressed="${!sandbox}">Base</button><button type="button" data-sbx="sandbox" aria-pressed="${sandbox}"${S.offline ? ' disabled' : ''}>Sandbox${sandbox ? ` (${nOv})` : ''}</button></div>
+        <select id="filePick">${files.map(n => `<option value="${n}"${n === state.explorer.file ? ' selected' : ''}>${n === 'sandbox_credit_memos' ? 'Sandbox · credit memos' : esc(SN[SCHEMA[n].sys]) + ' · ' + n} (${(n === state.explorer.file ? t.rows.length : (d.files[n] ? d.files[n].rows.length : S.sandbox.overlays.filter(o => o.file === n).length)).toLocaleString()})</option>`).join('')}</select>
+        <input type="search" id="explorerQ" placeholder="Search (all words must match)…" value="${esc(state.explorer.q)}" aria-label="Search">
+        <span class="note">${rows.length.toLocaleString()} of ${t.rows.length.toLocaleString()} rows · ${t.headers.length} columns${sandbox ? ` · ${t.ov.size} overlaid row(s) highlighted` : ''}</span></div>
+      <div class="pager"><button class="btn sm" data-action="page-prev"${state.explorer.page ? '' : ' disabled'}>‹ Prev</button><span class="note num">${rows.length ? `${p0 + 1}–${p0 + view.length}` : 0} · page ${state.explorer.page + 1}/${pages}</span><button class="btn sm" data-action="page-next"${state.explorer.page < pages - 1 ? '' : ' disabled'}>Next ›</button></div></div>
+    <div class="explorer-table"><table class="grid compact"><thead><tr>${sandbox ? '<th>Overlay</th>' : ''}${t.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${body || `<tr><td colspan="${t.headers.length + 1}" class="empty">No matching rows.</td></tr>`}</tbody></table></div>
+    <div class="card-foot">${sandbox ? 'Sandbox view: corrections are JSON overlays in state/' + esc(S.dsId) + '/' + esc(S.scId) + '/sandbox/ — the CSV files on disk are never changed.' : 'Base view: the CSV files exactly as extracted.'}</div></div>`;
+}
+
+/* ---------- Self-test & demo tools ---------- */
+SCREENS.selftest = {
+  async load() {
+    if (can('backscan') || can('explorer') || S.offline) { for (const m of source.list) { try { await loadDataset(m); } catch (e) { /* shown below */ } } }
+    if (!S.offline && !S.serverTest && !S.testing) runServerTest();
+    return null;
+  },
+  render() { return selftestHtml(); },
+};
+async function runServerTest() {
+  S.testing = true; if (S.route.screen === 'selftest') $('#view').innerHTML = selftestHtml();
+  try { S.serverTest = await api('/api/selftest'); } catch (e) { S.serverTest = { error: e.message }; }
+  S.testing = false;
+  if (S.route.screen === 'selftest') $('#view').innerHTML = selftestHtml();
+}
+function selftestHtml() {
+  const st = S.serverTest;
+  let server;
+  if (S.offline) server = '<div class="card"><div class="muted-box">Server self-test needs server.py (gate, agents, workflow and audit tests run on the server).</div></div>';
+  else if (S.testing || !st) server = '<div class="card"><div class="working"><span class="spinner"></span> Running server self-test (gate replays, agents, end-to-end workflow, guardrails)…</div></div>';
+  else if (st.error) server = `<div class="panel error"><h2>Self-test could not run</h2><p>${esc(st.error)}</p></div>`;
+  else server = `<div class="overall ${st.pass ? 'pass' : 'fail'}"><span class="o-big">${st.pass ? '✓ ALL PASS' : '✗ FAILURES'}</span><span class="o-sub">Server self-test: ${st.checks} checks, ${st.failed} failed, ${st.elapsed_ms} ms · isolated in-memory state and audit log, agent latency 0 · expectations from config/expected_gate_results.json and answer_key.csv</span>
+      <button class="btn sm" data-action="run-server-test" type="button" style="margin-left:auto">Run again</button></div>` +
+    st.groups.map(g => `<div class="card"><details class="legend"${g.pass ? '' : ' open'}><summary>${g.pass ? '<span class="res pass">PASS</span>' : '<span class="res fail">FAIL</span>'} ${esc(g.name)} <span class="count muted">${g.rows.filter(r => r.pass).length}/${g.rows.length}</span></summary>
+      <div class="table-wrap"><table class="grid compact"><thead><tr><th>Check</th><th>Expected</th><th>Actual</th><th>Result</th></tr></thead><tbody>${g.rows.map(r => `<tr><td>${esc(r.check)}</td><td class="mono">${esc(r.expected)}</td><td class="mono">${esc(r.actual)}</td><td><span class="res ${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span></td></tr>`).join('')}</tbody></table></div></details></div>`).join('');
+  const demo = !S.offline && S.demoTools ? `<div class="card demo-card"><div class="card-head"><h2>Demo tools</h2><span class="note">every action is written to the audit log</span></div><div class="card-body">
+      <button class="btn" data-action="reset-current" type="button">Reset demo state — ${esc(S.scId)}</button><button class="btn" data-action="reset-all" type="button">Reset all scenarios</button>
+      <button class="btn danger" data-action="arm-failure" type="button">Inject failure on next step</button><button class="btn" data-action="disarm-failure" type="button">Disarm</button>
+      <span class="note">Reset clears case state and sandbox and appends DEMO_RESET; the audit log is never deleted (only <span class="mono">py server.py --reset --purge-log</span> can clear it).</span></div></div>`
+    : (!S.offline ? '<div class="card"><div class="muted-box">Demo tools are not available to the read-only Auditor role.</div></div>' : '');
+  return head('Self-test & demo tools', 'Deterministic checks against the expected results') + demo + server + poc1SelfTestHtml();
+}
+function poc1SelfTestHtml() {
+  const loaded = source.list.map(m => source.cache.get(m.id)).filter(Boolean);
+  if (!loaded.length) return can('backscan') || can('explorer') || S.offline ? '' : '<div class="card"><div class="muted-box">The in-browser POC 1 self-test needs raw-data access; its server-side port is included above.</div></div>';
+  const cells = loaded.flatMap(x => ['backscan', 'daily'].map(mode => ({ x, mode, st: x.selfTest })));
+  const pick = (state.stPick && cells.find(c => c.x.id === state.stPick.id && c.mode === state.stPick.mode)) || cells.find(c => c.x.id === S.dsId && c.mode === state.mode) || cells[0];
+  const avail = cells.filter(c => c.st && c.st.available), allPass = avail.length && avail.every(c => c.st[c.mode].pass);
+  const matrix = cells.map(c => { const ok = c.st && c.st.available ? c.st[c.mode].pass : null; return `<button class="mx${c === pick ? ' current' : ''}" data-st="${esc(c.x.id)}|${c.mode}"><div class="mx-title">${esc(c.x.name)} · ${MODE_LABEL[c.mode]}</div><div class="mx-res ${ok === null ? 'na' : ok ? 'pass' : 'fail'}">${ok === null ? 'N/A' : ok ? 'PASS' : 'FAIL'}</div><div class="note">${ok === null ? esc(c.st ? c.st.reason : 'validation failed') : `${c.st[c.mode].rows.filter(r => r.pass).length} / ${c.st[c.mode].rows.length} checks`}</div></button>`; }).join('');
+  let detail = '';
+  if (pick && pick.st && pick.st.available) {
+    const t = pick.st[pick.mode];
+    detail = `<div class="card"><div class="card-head"><h2>${esc(pick.x.name)} · ${MODE_LABEL[pick.mode]}<span class="count">${t.rows.filter(r => r.pass).length} / ${t.rows.length}</span></h2><div class="tools"><span class="res ${t.pass ? 'pass' : 'fail'}">${t.pass ? 'PASS' : 'FAIL'}</span></div></div>
+      <div class="table-wrap"><table class="grid compact"><thead><tr><th>Case</th><th>Customer</th><th>Expected (answer_key.csv)</th><th>Actual (detector)</th><th>Result</th></tr></thead><tbody>${t.rows.map(r => `<tr><td><b>${esc(r.code)}</b></td><td>${esc(r.name)}</td><td class="mono">${esc(r.expected)}</td><td class="mono">${esc(r.actual)}</td><td><span class="res ${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span></td></tr>`).join('')}</tbody></table></div></div>`;
+  }
+  return `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:24px 0 8px">POC 1 detector — in-browser self-test (${allPass ? 'all pass' : 'see failures'})</h3><div class="matrix">${matrix}</div>${detail}`;
+}
+
+/* ---------- CSV exports ---------- */
+function toCSV(rows, cols) { const q = v => { if (v == null) return ''; const s = String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }; return [cols.join(','), ...rows.map(r => cols.map(c => q(r[c])).join(','))].join('\r\n'); }
+function inFrame() { try { return window.self !== window.top; } catch (e) { return true; } }
+function triggerDownload(name, text, type) { const url = URL.createObjectURL(new Blob([text], { type: type || 'text/csv;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
+function exportCSV(name, text) { if (inFrame()) { showCsvModal(name, text); return; } try { triggerDownload(name, text); } catch (e) { showCsvModal(name, text); } }
+function showCsvModal(name, text) {
+  const m = $('#modal');
+  m.innerHTML = `<div class="modal-box"><header><h2>${esc(name)}</h2><span class="note">If the download is blocked, copy the CSV instead.</span><button class="btn ghost sm" style="margin-left:auto" data-action="close-modal" aria-label="Close">×</button></header>
+    <div class="m-body"><textarea id="csvText" readonly spellcheck="false"></textarea></div><footer><button class="btn" data-action="try-download">Try download</button><button class="btn primary" data-action="copy-csv">Copy to clipboard</button></footer></div>`;
+  $('#csvText').value = text; m.dataset.name = name; m.hidden = false; $('#csvText').focus(); $('#csvText').select();
+}
+const slug = s => s.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
+function exportFindings() {
+  const d = cur();
+  const rows = filteredFindings().map(f => ({ case: d.labels[f.accountId] || '', account_id: f.accountId, customer: f.customer, class: f.cls, sa_id: f.saId, tariff: f.tariff, work_order: f.key,
+    wo_subtype: f.a.wo.wo_subtype, disconnect_at: f.a.wo.completed_at, severity: f.severity, bills_affected: f.billsAffected, bill_ids: f.a.billLines.map(l => l.bill.bill_id).join(' '),
+    post_disconnect_days: f.postDays, phantom_kwh: f.phantomKwh, actual_kwh_after_disconnect: f.actualAfterKwh, credit_consumption: f.a.consCredit.toFixed(2), credit_fixed: f.a.fixedCredit.toFixed(2),
+    fixed_retained: f.a.fixedRetained.toFixed(2), credit_total: f.credit.toFixed(2), probable_cause: f.cause, rules_fired: f.rules.join(' '), integration_msg: f.a.msg ? `${f.a.msg.msg_id} ${f.a.msg.status}` : '', recommended_action: f.action }));
+  exportCSV(`poc1_backscan_${slug(d.name)}.csv`, toCSV(rows, Object.keys(rows[0] || { account_id: 1 }).filter(c => c !== 'case' || state.labels)));
+}
+function exportHolds() {
+  const d = cur(), r = state.result;
+  const rows = r.daily.holds.map(h => ({ case: d.labels[h.accountId] || '', account_id: h.accountId, customer: h.customer, class: h.cls, sa_id: h.saId, work_order: h.wo.wo_id, wo_subtype: h.wo.wo_subtype,
+    disconnect_at: h.wo.completed_at, days_since: h.daysSince, sa_status_as_of: h.saNote, integration_status: h.msg ? `${h.msg.msg_id} ${h.msg.status}` : 'NO MESSAGE',
+    open_todo: h.todos.map(t => `${t.todo_id} ${t.assigned_to || 'unassigned'}`).join(' '), billed_post_disconnect_credit: h.creditToDate.toFixed(2), next_bill_run: h.nextRun || '', recommendation: 'Hold before next bill run', action: h.action }));
+  const um = r.daily.unmatched.map(u => ({ case: u.exposure ? d.labels[u.exposure.a.sa.account_id] || '' : '', account_id: u.exposure ? u.exposure.a.sa.account_id : '', customer: u.exposure && u.exposure.a.account ? u.exposure.a.account.customer_name + ' (if linked)' : '',
+    class: '', sa_id: u.exposure ? u.exposure.a.sa.sa_id : '', work_order: u.wo.wo_id, wo_subtype: u.wo.wo_subtype, disconnect_at: u.wo.completed_at, days_since: daysBetween(dateOf(u.wo.completed_at), r.daily.asOf),
+    sa_status_as_of: '', integration_status: u.msg ? `${u.msg.msg_id} ${u.msg.status}` : '', open_todo: '', billed_post_disconnect_credit: '', next_bill_run: r.daily.nextRun || '', recommendation: 'UNMATCHED — fix premise ID', action: `Premise ${u.recorded} not in crosswalk; suggested ${u.suggestion ? u.suggestion.premise : 'none'}` }));
+  const all = [...rows, ...um];
+  exportCSV(`poc1_daily_check_${r.daily.asOf}_${slug(d.name)}.csv`, toCSV(all, Object.keys(all[0] || { account_id: 1 }).filter(c => c !== 'case' || state.labels)));
+}
+
+/* ---------- Theme ---------- */
+function applyTheme() { const root = document.documentElement; if (state.theme === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', state.theme); }
+
+/* ---------- Offline: page opened from disk ---------- */
+function showOffline(err) {
+  $('#shell').hidden = true; $('#hdrControls').hidden = true; $('#stage').hidden = false;
+  $('#stage').innerHTML = `<div class="panel"><h2>The local server isn't reachable</h2>
+    <p>This app normally runs from <span class="mono">server.py</span>, which reads the CSV extracts (read-only) and runs the pre-bill gate, the agents, the workflow and the audit log.
+      ${location.protocol === 'file:' ? 'It looks like the page was opened directly from disk.' : `The request to <span class="mono">/api/users</span> failed (${esc(err && err.message || err)}).`}</p>
+    <p><b>To start it</b>, open a terminal in the <span class="mono">poc1</span> folder and run:</p><pre>py server.py</pre>
+    <p>Then open <span class="mono">http://127.0.0.1:8501/</span>. See README.txt for <span class="mono">--data</span>, <span class="mono">UTILICO_DATA_DIR</span> and <span class="mono">--port</span>.</p>
+    <p><b>Or run only the POC 1 detector in the browser</b>: choose the data folder (the one holding <span class="mono">dataset_A_with_errors</span> and <span class="mono">dataset_B_two_errors_corrected</span>). Files are read locally; nothing is uploaded or written.</p>
+    <p><button class="btn primary" data-action="choose-folder">Choose data folder</button></p><p class="note" id="localMsg"></p></div>`;
+}
+async function onFolderChosen(fileList) {
+  const list = discoverLocal(fileList);
+  if (!list.length) { const m = $('#localMsg'); if (m) m.textContent = 'No folder containing ccb_bill_segments.csv was found in that selection.'; return; }
+  source.mode = 'local'; source.list = list; source.cache.clear();
+  S.datasets = list.map(d => Object.assign({}, d, { files_present: d.present }));
+  S.dsId = (list.find(d => /dataset_A/i.test(d.folder)) || list[0]).id; state.dsId = S.dsId; S.scId = null;
+  S.me = { user_id: '', name: 'Local folder', role: 'LOCAL', title: 'POC 1 detector only' };
+  S.perms = { backscan: 'V', explorer: 'V', selftest: 'V' }; S.labels = { backscan: 'Back-scan / Daily', explorer: 'Data Explorer', selftest: 'Self-test' };
+  $('#stage').hidden = true; $('#shell').hidden = false; $('#hdrControls').hidden = true;
+  renderSourceLine();
+  go('backscan');
+}
+
+/* ---------- Events ---------- */
+function gotoExplorer(file, q) { state.explorer = { file, q, page: 0, mode: state.explorer.mode || 'base' }; state.detail = null; renderDrawer(); go('explorer'); window.scrollTo({ top: 0 }); }
+async function post(path, body, okMsg) {
+  S.busy = true;
+  try { const r = await api(path, { method: 'POST', body: body || {} }); if (okMsg) toast(okMsg); return r; }
+  catch (e) { toast(e.message, true); return null; }
+  finally { S.busy = false; S.last = {}; await route(true); refresh(); }
+}
+document.addEventListener('click', async e => {
+  const t = e.target.closest('button, tr[data-open], tr[data-goto-case], tr[data-work], th[data-sort], a[data-nav]');
+  if (!t) { if (e.target.id === 'scrim') { state.detail = null; renderDrawer(); } return; }
+  if (t.dataset.signin) { signIn(t.dataset.signin); return; }
+  if (t.dataset.nav) return;   // normal hash link
+  if (t.dataset.gotoCase) { go('case', t.dataset.gotoCase); return; }
+  if (t.dataset.work) { const w = JSON.parse(t.dataset.work); if (w.case_id && can('case_detail')) go('case', w.case_id); else go(w.screen || 'mywork'); return; }
+  if (t.dataset.act) {
+    const box = t.closest('[data-case]'); if (!box) return;
+    const val = sel => { const el = box.querySelector(sel); return el ? el.value : undefined; };
+    const payload = { reason: (val('.f-reason') || '').trim() };
+    const a = t.dataset.act;
+    if (a === 'DECIDE') { const o = box.querySelector('input[name="opt"]:checked'); if (!o) { toast('Choose an option first', true); return; } payload.option_id = o.value; }
+    if (a === 'FIELD_OUTCOME') payload.outcome = val('.f-outcome');
+    if (a === 'EDIT_COMMS' || a === 'APPROVE_COMMS') { if (box.querySelector('.f-letter')) { payload.customer_letter = val('.f-letter'); payload.regulator_response = val('.f-response'); } }
+    if (['REJECT_MATCH', 'CLOSE_NO_ACTION', 'FINANCE_REJECT', 'REJECT_PLAN', 'REJECT_COMMS'].includes(a) && !payload.reason) { toast('A written reason is required.', true); return; }
+    try {
+      if (a === 'APPROVE_COMMS' && payload.customer_letter !== undefined) await act(box.dataset.case, 'EDIT_COMMS', payload);
+      await act(box.dataset.case, a, payload);
+    } catch (err) { /* toast shown */ }
+    return;
+  }
+  if (t.dataset.issueAct) {
+    const box = t.closest('[data-issue]'); const tk = box.querySelector('.f-ticket');
+    await post(`/api/integration/issues/${encodeURIComponent(box.dataset.issue)}`, { action: t.dataset.issueAct, ticket_ref: tk ? tk.value : null }, 'Integration issue updated');
+    return;
+  }
+  if (t.dataset.release) { await post('/api/bills/release', { bill_ids: [t.dataset.release] }, 'Bill released'); return; }
+  if (t.dataset.feed) { S.feed = t.dataset.feed; S.last = {}; route(true); return; }
+  if (t.dataset.billfilter) { S.billFilter = t.dataset.billfilter; S.last = {}; route(true); return; }
+  if (t.dataset.sbx) { state.explorer.mode = t.dataset.sbx; route(true); return; }
+  if (t.id === 'workBtn') { go('mywork'); return; }
+  if (t.id === 'themeBtn') { state.theme = { auto: 'light', light: 'dark', dark: 'auto' }[state.theme]; applyTheme(); t.textContent = 'Theme: ' + { auto: 'Auto', light: 'Light', dark: 'Dark' }[state.theme]; return; }
+  // POC 1 back-scan controls
+  if (t.dataset.ds) { if (t.dataset.ds !== S.dsId) { if (S.offline) { S.dsId = t.dataset.ds; state.dsId = S.dsId; route(); } else { $('#dsSelect').value = t.dataset.ds; switchContext('dataset', t.dataset.ds); } } return; }
+  if (t.matches('#modeSeg button')) { if (t.dataset.v !== state.mode) { state.mode = t.dataset.v; run(); } return; }
+  if (t.id === 'runBtn') { run(); return; }
+  if (t.id === 'scanReset') { state.scanTouched = false; state.scan = defaultScanRange(cur().ix); run(); return; }
+  if (t.dataset.sort) { const k = t.dataset.sort; state.sort = state.sort.key === k ? { key: k, dir: -state.sort.dir } : { key: k, dir: ['account', 'customer', 'cls', 'cause', 'rules'].includes(k) ? 1 : -1 }; renderResults(); return; }
+  if (t.dataset.open) { state.detail = findCtx(t.dataset.open, t.dataset.key); renderDrawer(); return; }
+  if (t.dataset.gotoFile) { gotoExplorer(t.dataset.gotoFile, t.dataset.gotoQ); return; }
+  if (t.dataset.st) { const [id, mode] = t.dataset.st.split('|'); state.stPick = { id, mode }; $('#view').innerHTML = selftestHtml(); return; }
+  switch (t.dataset.action) {
+    case 'switch-user': showSignIn(); break;
+    case 'run-gate': await post('/api/gate/run', {}, 'Gate run complete — agents are investigating the held bills'); break;
+    case 'release-passed': await post('/api/bills/release', { all_passed: true }, 'Passed bills released'); break;
+    case 'send-backscan': { const r = await post('/api/backscan/send', {}, null); if (r) { toast(`${r.cases.length} case(s) created — agents are investigating`); go('cases'); } break; }
+    case 'audit-apply': S.auditF = {}; document.querySelectorAll('[data-af]').forEach(el => { if (el.value) S.auditF[el.dataset.af] = el.value; }); route(true); break;
+    case 'audit-clear': S.auditF = {}; S.auditVerify = null; route(true); break;
+    case 'audit-verify': try { S.auditVerify = await api('/api/audit/verify', { method: 'POST', body: {} }); route(true); } catch (err) { toast(err.message, true); } break;
+    case 'audit-export': try { const qs = new URLSearchParams(Object.entries(S.auditF).filter(([, v]) => v)).toString(); exportCSV('audit_log.csv', await api('/api/audit/export?' + qs, { raw: true })); } catch (err) { toast(err.message, true); } break;
+    case 'run-server-test': S.serverTest = null; runServerTest(); break;
+    case 'reset-current': if (confirm(`Reset case state and sandbox for ${S.scId}? The audit log is kept.`)) { await post('/api/demo/reset', { scope: 'current' }, 'Demo state reset for ' + S.scId); } break;
+    case 'reset-all': if (confirm('Reset case state and sandbox for every scenario? The audit log is kept.')) { await post('/api/demo/reset', { scope: 'all' }, 'All demo state reset'); } break;
+    case 'arm-failure': await post('/api/demo/inject_failure', { enabled: true }, 'Armed: the next execution step will fail'); break;
+    case 'disarm-failure': await post('/api/demo/inject_failure', { enabled: false }, 'Injected failure disarmed'); break;
+    case 'dismiss-banner': state.banner = null; { const b = $('#banner'); if (b) b.innerHTML = ''; } break;
+    case 'close-drawer': state.detail = null; renderDrawer(); break;
+    case 'export-findings': exportFindings(); break;
+    case 'export-holds': exportHolds(); break;
+    case 'choose-folder': $('#folderInput').click(); break;
+    case 'page-prev': state.explorer.page = Math.max(0, state.explorer.page - 1); $('#view').innerHTML = explorerHtml(); break;
+    case 'page-next': state.explorer.page++; $('#view').innerHTML = explorerHtml(); break;
+    case 'close-modal': $('#modal').hidden = true; break;
+    case 'try-download': try { triggerDownload($('#modal').dataset.name, $('#csvText').value); } catch (err) { /* blocked */ } break;
+    case 'copy-csv': { const ta = $('#csvText'); ta.select(); const done = () => { t.textContent = 'Copied ✓'; setTimeout(() => { t.textContent = 'Copy to clipboard'; }, 1500); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(ta.value).then(done, () => { document.execCommand('copy'); done(); }); else { document.execCommand('copy'); done(); } break; }
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (!$('#modal').hidden) { $('#modal').hidden = true; return; } if (state.detail) { state.detail = null; renderDrawer(); } }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('tr[data-open]')) { e.preventDefault(); state.detail = findCtx(e.target.dataset.open, e.target.dataset.key); renderDrawer(); }
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.id === 'dsSelect') switchContext('dataset', t.value);
+  else if (t.id === 'scSelect') switchContext('scenario', t.value);
+  else if (t.id === 'asOf') { if (t.value) { state.asOf = t.value; run(); } }
+  else if (t.id === 'scanStart' || t.id === 'scanEnd') { const s = $('#scanStart').value, en = $('#scanEnd').value; if (s && en && s <= en) { state.scan = { scanStart: s, scanEnd: en }; state.scanTouched = true; run(); } }
+  else if (t.id === 'labelsToggle' || t.id === 'hdrLabels') {
+    state.labels = t.checked; $('#hdrLabels').checked = t.checked;
+    if (S.route.screen === 'backscan') $('#view').innerHTML = backscanHtml(); else { S.last = {}; route(true); }
+  }
+  else if (t.id === 'sevFilter') { state.sevFilter = t.value; renderResults(); }
+  else if (t.id === 'causeFilter') { state.causeFilter = t.value; renderResults(); }
+  else if (t.id === 'filePick') { state.explorer.file = t.value; state.explorer.q = ''; state.explorer.page = 0; $('#view').innerHTML = explorerHtml(); }
+  else if (t.id === 'folderInput' && t.files && t.files.length) onFolderChosen(t.files);
+});
+let searchTimer = null;
+document.addEventListener('input', e => {
+  if (e.target.matches && e.target.matches('[data-track]')) e.target.dataset.dirty = '1';
+  if (e.target.id !== 'explorerQ') return;
+  state.explorer.q = e.target.value; state.explorer.page = 0;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { const pos = e.target.selectionStart; $('#view').innerHTML = explorerHtml(); const inp = $('#explorerQ'); inp.focus(); inp.setSelectionRange(pos, pos); }, 150);
+});
+
+boot();
+</script>
+</body>
+</html>

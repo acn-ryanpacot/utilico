@@ -1,0 +1,22 @@
+case_id,account_id,customer_name,opened_at,channel,category,subject,status,closed_at,billing_hold_set,linked_case_id,notes
+CASE-300111,8800010017,Kofi Nakamura,2026-10-22 13:46,PHONE,ACCOUNT_UPDATE,Change of mailing address,CLOSED,2026-10-22 17:00,N,,Address updated per customer request.
+CASE-300122,8800010004,Taylor Whitlock,2026-09-01 12:01,PHONE,ACCOUNT_UPDATE,Change of mailing address,CLOSED,2026-09-01 17:00,N,,Address updated per customer request.
+CASE-300133,8800010004,Taylor Whitlock,2026-10-14 15:12,EMAIL,PAYMENT,Payment arrangement request,CLOSED,2026-10-14 17:00,N,,Set up 3-month payment arrangement.
+CASE-300144,8800010001,Alex Bennett,2026-10-21 16:16,EMAIL,PAYMENT,Payment arrangement request,CLOSED,2026-10-21 17:00,N,,Set up 3-month payment arrangement.
+CASE-300155,8800010006,Casey Lindqvist,2026-09-27 16:37,WEB,BILLING_ENQUIRY,High bill enquiry,CLOSED,2026-09-27 17:00,N,,Explained seasonal usage; customer satisfied.
+CASE-300166,8800010025,Hugo Thorne,2026-09-28 16:01,EMAIL,BILLING_ENQUIRY,High bill enquiry,CLOSED,2026-09-28 17:00,N,,Explained seasonal usage; customer satisfied.
+CASE-300177,8800010042,Ridgeway Auto Care,2026-08-24 13:46,PHONE,BILLING_ENQUIRY,High bill enquiry,CLOSED,2026-08-24 17:00,N,,Explained seasonal usage; customer satisfied.
+CASE-300188,8800010022,Freya Yates,2026-09-25 13:08,EMAIL,BILLING_ENQUIRY,High bill enquiry,CLOSED,2026-09-25 17:00,N,,Explained seasonal usage; customer satisfied.
+CASE-300199,8800010016,Ingrid Grant,2026-09-22 11:58,PHONE,GENERAL_ENQUIRY,Tariff information,CLOSED,2026-09-22 17:00,N,,Sent tariff comparison by email.
+CASE-300210,8800010048,Sable & Finch Design,2026-08-26 13:46,PHONE,PAYMENT,Payment arrangement request,CLOSED,2026-08-26 17:00,N,,Set up 3-month payment arrangement.
+CASE-300221,8800010043,Saltmarsh Cafe,2026-09-19 11:48,PHONE,GENERAL_ENQUIRY,Tariff information,CLOSED,2026-09-19 17:00,N,,Sent tariff comparison by email.
+CASE-300232,8800010046,Granite Row Books,2026-10-07 12:14,PHONE,GENERAL_ENQUIRY,Tariff information,CLOSED,2026-10-07 17:00,N,,Sent tariff comparison by email.
+CASE-300243,8800010023,Ravi Fairweather,2026-10-24 15:35,EMAIL,PAYMENT,Payment arrangement request,CLOSED,2026-10-24 17:00,N,,Set up 3-month payment arrangement.
+CASE-300254,8800010003,Jamie Pemberton,2026-09-27 16:55,WEB,PAYMENT,Payment arrangement request,CLOSED,2026-09-27 17:00,N,,Set up 3-month payment arrangement.
+CASE-300265,8800010101,Harbourline Logistics Ltd,2026-10-16 11:05,PHONE,BILLING_ENQUIRY,Confirm no billing after disconnect,CLOSED,2026-10-16 11:20,N,,Facilities manager called: supply was disconnected on 14 Oct as they have relocated. Asked us to make sure no further charges are billed after that date. Advised CSR would note the account. Note added. No further action.
+CASE-300276,8800010101,Harbourline Logistics Ltd,2026-11-04 09:40,EMAIL,BILLING_DISPUTE,Billed for full October after disconnection,REOPENED,,N,CASE-300265,"04-Nov: Customer disputes October bill (full cycle). CSR checked CC&B: SA active, bill calculated correctly per tariff. Case closed 04-Nov 10:15 as bill valid. 05-Nov: Customer re-escalated to account manager, attached technician disconnect confirmation and photo of locked meter. Case reopened."
+CASE-300287,8800010101,Harbourline Logistics Ltd,2026-11-09 15:30,REGULATOR,REGULATORY_COMPLAINT,Formal complaint: billed for consumption after physical disconnection,OPEN,,N,CASE-300276,Regulator notified Utilico of formal complaint. Customer states: billing after disconnection is evidence that our systems do not communicate. Response due within regulatory deadline.
+CASE-300298,8800010214,Dana Whitfield,2026-09-15 10:10,MAIL,ACCOUNT_UPDATE,Returned mail - addressee moved,CLOSED,2026-09-15 10:30,N,,August bill returned by post marked 'moved away'. Note added to account.
+CASE-300309,8800010322,Luis Ferreira,2026-09-02 14:00,PHONE,COLLECTIONS,Final notice before disconnection,CLOSED,2026-09-02 14:10,N,,Customer advised of arrears and pending non-pay disconnection.
+CASE-300320,8800010322,Luis Ferreira,2026-09-19 16:45,WEB,PAYMENT,Arrears paid in full,CLOSED,2026-09-19 17:00,N,,Payment received. Reconnection order raised.
+CASE-300331,8800010455,Brightwater Bakery,2026-10-20 08:50,PHONE,GENERAL_ENQUIRY,Neighbour report - lights on at closed premises,CLOSED,2026-10-20 09:05,N,,Caller reports lights on at former bakery premises. Logged for info only.

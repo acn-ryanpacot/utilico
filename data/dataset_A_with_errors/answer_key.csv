@@ -1,0 +1,13 @@
+case,customer_name,back_scan_result,severity,phantom_kwh_billed,credit_consumption,credit_fixed,credit_total,cause_and_notes,daily_check_2026_11_02
+E1,Harbourline Logistics Ltd,FINDING,HIGH,8500.0,1360.00,76.50,1436.50,"C1/C2 - disconnect never reached CC&B (integration ERROR, To Do unworked)",HOLD
+E2,Dana Whitfield,FINDING,HIGH,1992.0,418.32,70.55,488.87,C1 - MOVE_OUT subtype not mapped; message SKIPPED; 3 bills affected,HOLD
+E3,Copperleaf Studio,UNMATCHED,,4680.0,795.60,81.90,877.50,C3 - OMS premise PRM-0O417 (letter O) does not match PRM-00417; amounts = potential exposure if linked,UNMATCHED
+E4,Luis Ferreira,FINDING,MEDIUM,252.0,52.92,0.00,52.92,C4 + C5 - non-pay disconnect keeps SA active by design; MDM estimated while disconnected; fixed $11.90 retained per tariff,NONE
+E5,Priya Natarajan,FINDING,LOW,60.0,12.60,1.70,14.30,C6 - bill run 2026-11-02 01:00 before stop processed 2026-11-03 06:00,HOLD
+E6,Brightwater Bakery,FINDING,REVIEW,0.0,0.00,0.00,0.00,"Consumption after disconnect: 645 kWh ACTUAL Sep 19-Oct 31 (660 kWh to Nov 1), unbilled - possible failed disconnect or tamper",NONE
+E7,Northgate Dental,DAILY_CHECK_ONLY,,0.0,0.00,0.00,0.00,"Disconnect 2026-11-01 14:20, integration ERROR, SA still ACTIVE - hold before next bill run",HOLD
+N1,Eastside Florist,NO_FLAG,,0.0,0.00,0.00,0.00,Proper stop; prorated final bill; zeros after,NONE
+N2,Gareth Owens,NO_FLAG,,0.0,0.00,0.00,0.00,Disconnect work order CANCELLED,NONE
+N3,Rosa Delgado,NO_FLAG,,0.0,0.00,0.00,0.00,6 estimated days Sep 12-17 on an active premise (comms failure),NONE
+N4,Kestrel Print Co,NO_FLAG,,0.0,0.00,0.00,0.00,Disconnect 2026-10-31 23:10; final bill through Oct 31 (disconnect day billable),NONE
+N5,Amara Osei,NO_FLAG,,0.0,0.00,0.00,0.00,"METER_EXCHANGE work order, not a disconnect",NONE
