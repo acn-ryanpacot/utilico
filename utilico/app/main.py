@@ -46,7 +46,7 @@ class AppState:
 
 
 def create_app(data_dir=None, state_root=STATE_DIR):
-    app = FastAPI(title="AI-TrueBILL", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="AI-Utilico", docs_url=None, redoc_url=None, openapi_url=None)
     st = AppState(data_dir or os.environ.get("UTILICO_DATA_DIR") or DEFAULT_DATA_DIR, state_root)
     app.state.tb = st
     cfg, eng = st.cfg, st.engine

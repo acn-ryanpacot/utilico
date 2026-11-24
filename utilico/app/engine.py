@@ -22,7 +22,7 @@ from .sandbox import Sandbox
 from .util import STATE_DIR, NotFound, now_utc, read_json, write_json_atomic
 from .workflow import CaseMixin
 
-STATE_VERSION = 4          # 4 = no timeline; one workspace per dataset; per-case "as of" time
+STATE_VERSION = 5          # 5 = renamed to AI-Utilico (UT- case ids); no timeline; per-case "as of" time
 WORKSPACE = "WORKSPACE"    # the single session id per dataset (audit scenario_id)
 EXTRACT_END = "2026-11-10 23:59"
 DATA_START = "2026-08-01"

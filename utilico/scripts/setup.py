@@ -1,4 +1,4 @@
-"""One-time setup for AI-TrueBILL - the ONLY step that uses the network.
+"""One-time setup for AI-Utilico - the ONLY step that uses the network.
 
   1. creates .venv with Python 3.14 and installs requirements.txt (exact pins)
   2. downloads the pinned Alpine.js build into static/vendor/
@@ -6,7 +6,7 @@
      which verifies the archive's SHA-256)
   4. writes requirements.lock.txt (pip freeze) and prints the installed versions
 
-Usage (from the truebill folder):   py -3.14 scripts\\setup.py
+Usage (from the utilico folder):   py -3.14 scripts\\setup.py
 After this, `python run.py` runs fully offline.
 """
 import os

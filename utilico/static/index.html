@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI-TrueBILL</title>
+<title>AI-Utilico</title>
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/app.js"></script>
 <script defer src="/static/vendor/alpine-3.17.5.min.js"></script>
 </head>
-<body x-data="trueBill" x-cloak>
+<body x-data="aiUtilico" x-cloak>
 
 <!-- ================= sign-in ================= -->
 <template x-if="!me">
   <div class="signin">
-    <div class="brand"><div class="logo">TB</div><div><h1>AI-TrueBILL</h1><p>Billed-after-disconnection agent workflow · Utilico Energy (fictional data)</p></div></div>
+    <div class="brand"><div class="logo">AU</div><div><h1>AI-Utilico</h1><p>Billed-after-disconnection agent workflow · Utilico Energy (fictional data)</p></div></div>
     <h2 style="margin-top:26px">Sign in</h2>
     <p class="muted">Simulated sign-in, no passwords. Agents retrieve, reconcile and recommend; one accountable human - the DRI - makes the final decision on every case, and the process ends there. The server enforces every permission and segregation-of-duties rule.</p>
     <div class="users">
@@ -34,7 +34,7 @@
 <div>
 <header class="top">
   <div class="top-row">
-    <div class="brand"><div class="logo">TB</div><div><h1>AI-TrueBILL</h1><p>OMS × CC&amp;B × MDM × CRM × GL</p></div></div>
+    <div class="brand"><div class="logo">AU</div><div><h1>AI-Utilico</h1><p>OMS × CC&amp;B × MDM × CRM × GL</p></div></div>
     <select class="input" x-model="dsId" @change="switchCtx('dataset')" aria-label="Dataset"><template x-for="d in datasets" :key="d.id"><option :value="d.id" x-text="d.name" :selected="d.id===dsId"></option></template></select>
     <span class="badge agent" x-text="agent ? agent.label : 'Agent: mock (scripted)'"></span>
     <span class="badge" :class="st && st.knowledge.mode==='chromadb' ? 'ok' : 'warn'" x-text="st && st.knowledge.mode==='chromadb' ? 'Knowledge: ChromaDB (local MiniLM)' : 'Knowledge store: fallback mode'"></span>
@@ -290,7 +290,7 @@
           <select class="input" x-model="auditF.user"><option value="">All actors</option><template x-for="u in users" :key="u.user_id"><option :value="u.user_id" x-text="u.name"></option></template><option value="agent.orchestrator">Orchestrator</option><option value="agent.retrieval">Data Retrieval</option><option value="agent.reconciliation">Reconciliation</option><option value="agent.recommendation">Recommendation</option></select>
           <select class="input" x-model="auditF.persona"><option value="">All personas</option><option value="CSR">CSR</option><option value="DRI">DRI</option><option value="AGENT">Agents</option><option value="SYSTEM">System</option></select>
           <select class="input" x-model="auditF.action"><option value="">All actions</option><template x-for="a in data.actions" :key="a"><option :value="a" x-text="a"></option></template></select>
-          <input class="input" placeholder="Case, e.g. TB-1001" x-model="auditF.case">
+          <input class="input" placeholder="Case, e.g. UT-1001" x-model="auditF.case">
           <input class="input" type="date" x-model="auditF.from"><input class="input" type="date" x-model="auditF.to"><input class="input" type="search" placeholder="Free text" x-model="auditF.q">
           <button class="btn primary" @click="load(false)">Apply</button><button class="btn" @click="auditF={}; load(false)">Clear</button><span class="muted" x-text="data.total + ' event(s)'"></span></div></div>
           <div class="table-wrap"><table class="grid"><tr><th>When</th><th>As of</th><th>Who</th><th>What</th><th>Object</th><th>Detail</th></tr>

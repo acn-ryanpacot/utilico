@@ -1,4 +1,4 @@
-# AI-TrueBILL — billed-after-disconnection agent workflow (Utilico Energy)
+# AI-Utilico — billed-after-disconnection agent workflow (Utilico Energy)
 
 Agents (Orchestrator, Data Retrieval in five parallel lanes, Reconciliation, Recommendation) and one accountable human decision point (the DRI) — catching **customers billed for days after their service was physically disconnected**, and accounts still active after a disconnect. The process ends at the DRI's decision (approved or rejected), which seals the case; nothing is executed afterwards. All data is fictional. Runs fully offline; the LLM is a deterministic mock. Accenture colour theme (colours only, light and dark).
 
@@ -7,7 +7,7 @@ Rules: [`docs/workflow_rules.md`](docs/workflow_rules.md) (v3.2). Stack and vers
 ## Setup (once — the only step that uses the network)
 
 ```powershell
-cd C:\sources\Utilco\truebill
+cd C:\sources\Utilco\utilico
 py -3.14 scripts\setup.py
 ```
 

@@ -32,7 +32,7 @@ def factual_lines(md):
         if not line or line.startswith("#") or set(line) <= set("-|: "):
             continue
         body = CITE.sub("", line)
-        body = re.sub(r"\bBILL-NEW-\d+\b|\bTB-\d+\b", "", body)
+        body = re.sub(r"\bBILL-NEW-\d+\b|\bUT-\d+\b", "", body)
         if MONEY.search(body) or DATE.search(body) or RECORD.search(body) or ACCOUNT.search(body):
             m = CITE.search(line)
             out.append({"line": line, "cited": bool(m), "fact_ids": CITE_ANY.findall(m.group(1)) if m else []})

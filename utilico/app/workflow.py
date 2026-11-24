@@ -60,7 +60,7 @@ class CaseMixin:
             jira = None
         else:
             st["case_seq"] += 1
-            case_id = "TB-%04d" % (1000 + st["case_seq"])
+            case_id = "UT-%04d" % (1000 + st["case_seq"])
             jira = "BILL-NEW-%d" % (1146 + st["case_seq"])
         res = seed["res"]
         v = self.view()

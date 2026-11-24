@@ -1,4 +1,4 @@
-/* AI-TrueBILL UI - Alpine.js 3 (vendored), no other libraries. Every request carries X-User-Id; the server
+/* AI-Utilico UI - Alpine.js 3 (vendored), no other libraries. Every request carries X-User-Id; the server
    enforces every permission. Live updates arrive over Server-Sent Events (fetch-based reader, so the user header
    is sent on the stream too). */
 const NAV = [
@@ -18,7 +18,7 @@ function money(n) { if (n === null || n === undefined || n === '') return '—';
 function pct(x) { return x === null || x === undefined ? '—' : (x * 100).toFixed(x === 1 || x === 0 ? 0 : 1) + '%'; }
 function hhmm(iso) { return iso ? iso.replace('T', ' ').slice(0, 16) : ''; }
 
-function trueBill() {
+function aiUtilico() {
   return {
     users: [], agent: null, knowledgeMode: null, me: null, perms: {}, labels: {}, datasets: [],
     dsId: 'dataset_A_with_errors', route: { screen: 'dashboard', id: null }, nav: NAV,
@@ -198,4 +198,4 @@ function trueBill() {
     },
   };
 }
-document.addEventListener('alpine:init', () => { Alpine.data('trueBill', trueBill); });
+document.addEventListener('alpine:init', () => { Alpine.data('aiUtilico', aiUtilico); });

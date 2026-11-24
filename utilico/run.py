@@ -1,4 +1,4 @@
-"""AI-TrueBILL - start the local app.
+"""AI-Utilico - start the local app.
 
   python run.py                  start Uvicorn on 127.0.0.1:8501 and open the browser
   python run.py --reset          clear case state, sandbox and outputs (appends DEMO_RESET), then start
@@ -21,7 +21,7 @@ guard.set_offline_env()            # before chromadb / onnx are imported
 
 
 def main():
-    ap = argparse.ArgumentParser(description="AI-TrueBILL (local, offline, mocked agents)")
+    ap = argparse.ArgumentParser(description="AI-Utilico (local, offline, mocked agents)")
     ap.add_argument("--port", type=int, default=8501)
     ap.add_argument("--data", default=None, help="data folder (default C:\\sources\\Utilco\\data or UTILICO_DATA_DIR)")
     ap.add_argument("--no-browser", action="store_true")
@@ -51,7 +51,7 @@ def main():
     guard.install()
     import uvicorn
     from app.main import create_app
-    print("AI-TrueBILL - billed-after-disconnection agent workflow (Utilico Energy, fictional data)")
+    print("AI-Utilico - billed-after-disconnection agent workflow (Utilico Energy, fictional data)")
     print("  Data folder : %s (read-only)" % data_dir)
     print("  Offline     : OFFLINE_GUARD=%s - non-localhost connections are blocked and logged" % os.environ.get("OFFLINE_GUARD", "1"))
     app = create_app(data_dir)

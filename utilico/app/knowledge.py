@@ -13,7 +13,7 @@ import uuid
 
 from .util import DOCS_DIR, MODELS_DIR
 
-log = logging.getLogger("truebill.knowledge")
+log = logging.getLogger("utilico.knowledge")
 MODEL_PATH = os.path.join(MODELS_DIR, "all-MiniLM-L6-v2")
 COLLECTIONS = ("rules", "thresholds", "case_history")
 

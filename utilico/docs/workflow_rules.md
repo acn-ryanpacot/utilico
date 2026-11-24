@@ -1,6 +1,6 @@
-# AI-TrueBILL workflow rules v3.2
+# AI-Utilico workflow rules v3.2
 
-Readable rule book for AI-TrueBILL, also indexed into the knowledge store's `rules` collection. Rule set version: **v1.0** (`config/rules/v1.0.json`).
+Readable rule book for AI-Utilico, also indexed into the knowledge store's `rules` collection. Rule set version: **v1.0** (`config/rules/v1.0.json`).
 
 **v3.2 changes:** the timeline is removed - no replay scenarios, bill runs, disconnect follow-ups, dispute events, presets, autopilot, demo reset or stale-feed toggle. Cases come only from the back-scan and the CSR account lookup, each read as of its own date. **v3.1:** the process ends at the DRI's decision (no Execution agent, verifier, Finance or output step); Finance removed; CSR account lookup; Accenture colour theme. The four output templates are kept in the code but switched off.
 

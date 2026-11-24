@@ -1,4 +1,4 @@
-# AI-TrueBILL - exact pins (releases at least two weeks old on 2026-11-24).
+# AI-Utilico - exact pins (releases at least two weeks old on 2026-11-24).
 # The full resolved set, including transitive dependencies, is written to requirements.lock.txt by scripts/setup.py.
 fastapi==0.162.2
 starlette==1.10.0
