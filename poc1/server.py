@@ -55,14 +55,15 @@ F_ACC, F_SA, F_BILL, F_TAR, F_TODO = ("ccb_accounts.csv", "ccb_service_agreement
 F_MTR, F_READ, F_WO, F_CRM = "mdm_meters.csv", "mdm_daily_reads.csv", "oms_work_orders.csv", "crm_cases.csv"
 F_GL, F_PER, F_MSG, F_XW, F_KEY = ("gl_journal_lines.csv", "gl_periods.csv", "integration_message_log.csv",
                                    "ref_id_crosswalk.csv", "answer_key.csv")
-F_MEMO = "sandbox_credit_memos"          # virtual table that exists only in the sandbox
+F_MEMO = "sandbox_credit_memos"          # virtual tables that exist only in the sandbox
+F_LETTER = "sandbox_letters"
 ALLOWED_FILES = (F_ACC, F_SA, F_BILL, F_TAR, F_TODO, F_MTR, F_READ, F_WO, F_CRM, F_GL, F_PER, F_MSG, F_XW, F_KEY)
 KEY_FIELD = {F_ACC: "account_id", F_SA: "sa_id", F_BILL: "bill_id", F_TAR: "tariff_code", F_TODO: "todo_id",
              F_MTR: "mdm_meter_id", F_READ: "read_id", F_WO: "wo_id", F_CRM: "case_id", F_GL: "je_id",
-             F_PER: "accounting_period", F_MSG: "msg_id", F_XW: "oms_premise_id", F_MEMO: "memo_id"}
+             F_PER: "accounting_period", F_MSG: "msg_id", F_XW: "oms_premise_id", F_MEMO: "memo_id", F_LETTER: "letter_id"}
 SYSTEM_OF = {F_ACC: "CC&B", F_SA: "CC&B", F_BILL: "CC&B", F_TAR: "CC&B", F_TODO: "CC&B", F_MTR: "MDM", F_READ: "MDM",
              F_WO: "OMS", F_CRM: "CRM", F_GL: "GL", F_PER: "GL", F_MSG: "Integration", F_XW: "Master data",
-             F_MEMO: "Sandbox"}
+             F_MEMO: "Sandbox", F_LETTER: "Sandbox"}
 MARKER_FILE = F_BILL
 MAX_DEPTH = 2
 DISPLAY_NAMES = {
@@ -216,10 +217,16 @@ class Config:
         return self.get("playbooks.json")["playbooks"]
 
     def expected(self):
-        return self.get("expected_gate_results.json")
+        return self.get("expected_results.json")
 
-    def level(self, role, screen):
-        return self.perms()["screens"].get(screen, {}).get(role, "-")
+    def workflow(self):
+        return self.get("workflow.json")
+
+    def sla(self):
+        return self.get("sla.json")
+
+    def level(self, persona, screen):
+        return self.perms()["screens"].get(screen, {}).get(persona, "-")
 
 
 # =============================================================================================
@@ -458,6 +465,7 @@ class View:
             msgs.append(m)
         t[F_MSG] = msgs
         t[F_MEMO] = []
+        t[F_LETTER] = []
         return t
 
     def _apply(self, ov):
@@ -510,6 +518,7 @@ class View:
             self.gl_by_ref.setdefault(x["source_ref"], []).append(x)
         self.periods = {p["accounting_period"]: p for p in t[F_PER]}
         self.memos = {m["memo_id"]: m for m in t[F_MEMO]}
+        self.letters = {x["letter_id"]: x for x in t.get(F_LETTER, [])}
         self.id_index = {}
         for f, rows in t.items():
             kf = KEY_FIELD.get(f)
@@ -769,8 +778,8 @@ def poc1_detect(view, as_of, scan_start=None, scan_end=None):
 #   G3 SA ACTIVE at scenario time despite a STOP_SERVICE / MOVE_OUT disconnect
 #   G4 the disconnect's integration message is ERROR / SKIPPED / UNPROCESSED (or missing) at scenario time
 #   G5 an unmatched OMS disconnect has a near match (Levenshtein <= 1, O/0 I/1) to this bill's premise
-#   G6 ACTUAL kWh > 0 after a disconnect on a STOPPED SA or DISCONNECTED meter (revenue protection)
-# Outcome: HELD if G1/G2/G5; NON_BLOCKING if only G3/G4; else PASSED.
+# Outcome: HELD if G1/G2/G5; NON_BLOCKING if only G3/G4; else PASSED.  (workflow_rules.md v2.0 §3)
+# Usage after a disconnect that was NOT billed (revenue protection, sample E6) is out of scope: no rule, no ticket.
 # =============================================================================================
 BLOCKING = ("G1", "G2", "G5")
 RULE_TEXT = {
@@ -779,7 +788,6 @@ RULE_TEXT = {
     "G3": "SA ACTIVE at scenario time despite a STOP_SERVICE / MOVE_OUT disconnect",
     "G4": "Integration message ERROR, SKIPPED or UNPROCESSED at scenario time",
     "G5": "Unmatched OMS disconnect has a near-match premise (ID mismatch)",
-    "G6": "ACTUAL consumption after disconnect on a stopped SA / disconnected meter",
 }
 
 
@@ -829,9 +837,12 @@ def evaluate_bill(view, bill, unmatched):
                                     "msg_id": msg["msg_id"] if msg else None, "msg_status": status})
             for um in unmatched:
                 if prem in um["candidates"] and bill["period_end"] > um["disconnect_date"]:
-                    details.append({"wo_id": um["wo"]["wo_id"], "premise": prem, "rules": ["G5"],
+                    msg = view.latest_msg(um["wo"]["wo_id"])
+                    status = msg["status"] if msg else "MISSING"
+                    rules = ["G5"] + (["G4"] if status in ("ERROR", "SKIPPED", "UNPROCESSED", "MISSING") else [])
+                    details.append({"wo_id": um["wo"]["wo_id"], "premise": prem, "rules": rules,
                                     "unmatched_premise": um["wo"]["oms_premise_id"], "post_days": None,
-                                    "msg_id": None, "msg_status": None})
+                                    "msg_id": msg["msg_id"] if msg else None, "msg_status": status})
     rules = sorted({r for d in details for r in d["rules"]})
     if any(r in BLOCKING for r in rules):
         outcome = "HELD"
@@ -842,43 +853,21 @@ def evaluate_bill(view, bill, unmatched):
     return {"outcome": outcome, "rules": rules, "details": details}
 
 
-def g6_hits(view):
-    out = []
-    ru = view.reads_until()
-    for wo in view.completed_disconnects():
-        res = resolve_premise(view, wo["oms_premise_id"], wo["completed_at"][:10])
-        if not res:
-            continue
-        win = disconnect_window(view, wo)
-        last = min(win["end"], ru) if win["end"] else ru
-        if not last or win["start"] > last:
-            continue
-        reads = view.reads_by_meter.get(res["xw"]["mdm_meter_id"], {})
-        act = [reads[d] for d in day_range(win["start"], last) if d in reads and reads[d]["read_quality"] == "ACTUAL" and num(reads[d]["kwh"]) > 0]
-        meter_state = (res["meter"] or {}).get("connection_state")
-        if act and (res["sa"]["sa_status"] == "STOPPED" or meter_state == "DISCONNECTED"):
-            out.append({"wo": wo, "res": res, "win": win, "kwh": round1(sum(num(r["kwh"]) for r in act)),
-                        "first": act[0]["read_date"], "last": act[-1]["read_date"], "days": len(act)})
-    return out
-
-
 def integration_signature(msg, wo):
-    """Group integration problems by a short, stable error signature."""
+    """Root-cause register key: a short, stable integration error signature (workflow_rules.md §10, Appendix A)."""
     if not msg:
         return "No integration message received"
     st, err = msg["status"], msg.get("error_message") or ""
     if st == "SKIPPED" and "mapping" in err.lower():
-        return "No CC&B mapping for wo_subtype %s" % wo["wo_subtype"]
-    if st == "UNPROCESSED":
-        return "Message not yet processed at bill run (retry queue)"
+        return "No CC&B mapping for %s" % wo["wo_subtype"]
+    if st == "UNPROCESSED" or "maintenance" in err.lower():
+        return "Unprocessed at bill run (delivery delay)"
     if re.search(r"cross[\s-]?ref", err, re.I):
         return "Premise not found in cross-reference"
     if "pending" in err.lower():
-        return "CC&B rejected Stop SA: pending bill segment"
+        return "Stop SA rejected – pending bill segment"
     if "timeout" in err.lower():
         return "Timeout calling CC&B"
-    if "maintenance" in err.lower():
-        return "Delivered late after maintenance outage"
     return (st + ": " + err)[:70]
 
 
@@ -931,24 +920,15 @@ def run_gate(view):
                     "unmatched_premise": det.get("unmatched_premise"), "bill_ids": rem["bill_ids"],
                     "expected": {"action": "CREDIT", "credit": rem["credit"], "bill_ids": rem["bill_ids"],
                                  "lines": rem["lines"], "gl_period": view.posting_period()}}
-    for hit in g6_hits(view):
-        acct = hit["res"]["sa"]["account_id"]
-        key = (acct, hit["wo"]["wo_id"], "REVENUE_PROTECTION")
-        if key in seeds:
-            continue
-        t = view.tariffs.get(hit["res"]["sa"]["tariff_code"])
-        seeds[key] = {"case_type": "REVENUE_PROTECTION", "account_id": acct, "root_wo_id": hit["wo"]["wo_id"], "res": hit["res"],
-                      "win": hit["win"], "gates": ["G6"], "draft_bill_id": None, "unmatched_premise": None, "bill_ids": [],
-                      "expected": {"action": "FIELD_CHECK", "unbilled_kwh": hit["kwh"], "from": hit["first"], "to": hit["last"],
-                                   "unbilled_value": money(hit["kwh"] * num(t["rate_per_kwh"])) if t else 0.0, "reduction": 0.0}}
     return {"bills": bill_results, "seeds": seeds, "unmatched": unmatched}
 
 
-def backscan_seeds(view):
-    """BACKSCAN scenario: POC 1 findings become REMEDIATE (credit > 0) or REVENUE_PROTECTION (REVIEW) cases;
-    unmatched disconnects become REMEDIATE cases flagged G5 (potential exposure if linked)."""
+def backscan_rows(view):
+    """POC 1 back-scan as of the extract date, classified for 'Send to workflow'.
+    FINDING rows with a credit and the unmatched row are eligible; REVIEW rows (usage after disconnect, not billed)
+    are revenue protection - out of scope - and can never be sent."""
     det = poc1_detect(view, view.Tdate)
-    seeds = OrderedDict()
+    rows = []
     pp = view.posting_period()
     for f in det["back"]["findings"]:
         wo, res, win = f["wo"], f["res"], f["win"]
@@ -960,34 +940,32 @@ def backscan_seeds(view):
             gates.append("G3")
         if not msg or msg["status"] in ("ERROR", "SKIPPED", "UNPROCESSED"):
             gates.append("G4")
-        if f["credit"] > 0:
-            lines = [{"bill_id": l["bill"]["bill_id"], "credit": l["credit"], "consumption_credit": l["cons"],
-                      "fixed_credit": l["fixed_credit"], "phantom_kwh": l["phantom"]} for l in f["lines"] if l["credit"] > 0]
-            seeds[(f["account_id"], wo["wo_id"], "REMEDIATE")] = {
-                "case_type": "REMEDIATE", "account_id": f["account_id"], "root_wo_id": wo["wo_id"], "res": res, "win": win,
-                "gates": gates, "draft_bill_id": None, "unmatched_premise": None, "bill_ids": [l["bill_id"] for l in lines],
-                "expected": {"action": "CREDIT", "credit": f["credit"], "bill_ids": [l["bill_id"] for l in lines], "lines": lines,
-                             "gl_period": pp, "poc1_severity": f["severity"]}}
-        else:
-            t = view.tariffs.get(res["sa"]["tariff_code"])
-            seeds[(f["account_id"], wo["wo_id"], "REVENUE_PROTECTION")] = {
-                "case_type": "REVENUE_PROTECTION", "account_id": f["account_id"], "root_wo_id": wo["wo_id"], "res": res, "win": win,
-                "gates": ["G6"], "draft_bill_id": None, "unmatched_premise": None, "bill_ids": [],
-                "expected": {"action": "FIELD_CHECK", "unbilled_kwh": f["unbilled_kwh"], "reduction": 0.0,
-                             "unbilled_value": money(f["unbilled_kwh"] * num(t["rate_per_kwh"])) if t else 0.0}}
+        lines = [{"bill_id": l["bill"]["bill_id"], "credit": l["credit"], "consumption_credit": l["cons"],
+                  "fixed_credit": l["fixed_credit"], "phantom_kwh": l["phantom"]} for l in f["lines"] if l["credit"] > 0]
+        eligible = f["credit"] > 0
+        rows.append({"wo_id": wo["wo_id"], "account_id": f["account_id"], "kind": "FINDING" if eligible else "REVIEW",
+                     "eligible": eligible, "reason": None if eligible else "Out of scope – revenue protection",
+                     "seed": {"case_type": "REMEDIATE", "account_id": f["account_id"], "root_wo_id": wo["wo_id"], "res": res, "win": win,
+                              "gates": gates, "draft_bill_id": None, "unmatched_premise": None, "bill_ids": [l["bill_id"] for l in lines],
+                              "expected": {"action": "CREDIT", "credit": f["credit"], "bill_ids": [l["bill_id"] for l in lines],
+                                           "lines": lines, "gl_period": pp, "poc1_severity": f["severity"]}} if eligible else None})
     for um in det["back"]["unmatched"]:
         if not um.get("res"):
+            rows.append({"wo_id": um["wo"]["wo_id"], "account_id": None, "kind": "UNMATCHED", "eligible": False,
+                         "reason": "No near-match premise to link", "seed": None})
             continue
         a = um["analysis"]
         lines = [{"bill_id": l["bill"]["bill_id"], "credit": l["credit"], "consumption_credit": l["cons"],
                   "fixed_credit": l["fixed_credit"], "phantom_kwh": l["phantom"]} for l in a["lines"] if l["credit"] > 0]
-        seeds[(um["account_id"], um["wo"]["wo_id"], "REMEDIATE")] = {
-            "case_type": "REMEDIATE", "account_id": um["account_id"], "root_wo_id": um["wo"]["wo_id"], "res": um["res"],
-            "win": disconnect_window(view, um["wo"], um["wo"]["oms_premise_id"]), "gates": ["G4", "G5"], "draft_bill_id": None,
-            "unmatched_premise": um["wo"]["oms_premise_id"], "bill_ids": [l["bill_id"] for l in lines],
-            "expected": {"action": "CREDIT", "credit": um["exposure"], "bill_ids": [l["bill_id"] for l in lines], "lines": lines,
-                         "gl_period": pp}}
-    return seeds
+        rows.append({"wo_id": um["wo"]["wo_id"], "account_id": um["account_id"], "kind": "UNMATCHED", "eligible": um["exposure"] > 0,
+                     "reason": None,
+                     "seed": {"case_type": "REMEDIATE", "account_id": um["account_id"], "root_wo_id": um["wo"]["wo_id"], "res": um["res"],
+                              "win": disconnect_window(view, um["wo"], um["wo"]["oms_premise_id"]), "gates": ["G4", "G5"],
+                              "draft_bill_id": None, "unmatched_premise": um["wo"]["oms_premise_id"],
+                              "bill_ids": [l["bill_id"] for l in lines],
+                              "expected": {"action": "CREDIT", "credit": um["exposure"], "bill_ids": [l["bill_id"] for l in lines],
+                                           "lines": lines, "gl_period": pp}}})
+    return rows
 
 
 # =============================================================================================
@@ -1020,9 +998,10 @@ class AuditLog:
             ev["event_id"] = "EV-%07d" % (len(self.events) + 1)
             ev["timestamp_utc"] = now_utc()
             ev["timestamp_local"] = now_local()
-            for k in ("scenario_time", "dataset_id", "scenario_id", "actor_type", "actor_id", "actor_name", "actor_role",
-                      "action", "object_type", "object_id", "case_id", "before", "after", "reason", "agent_mode"):
+            for k in ("scenario_time", "dataset_id", "scenario_id", "actor_type", "actor_id", "actor_name", "actor_persona",
+                      "action", "object_type", "object_id", "ticket_id", "before", "after", "reason", "agent_mode", "autopilot"):
                 ev[k] = fields.get(k)
+            ev["autopilot"] = bool(ev["autopilot"])
             ev["prev_hash"] = self.last_hash
             ev["hash"] = hashlib.sha256((self.last_hash + canon(ev)).encode("utf-8")).hexdigest()
             line = json.dumps(ev, ensure_ascii=False, separators=(",", ":"))
@@ -1066,8 +1045,9 @@ class AuditLog:
 # SECTION 9 - STATE STORE (state/<dataset>/<scenario>/state.json + sandbox/overlays.json)
 # =============================================================================================
 def new_state(ds_id, sc_id):
-    return {"dataset_id": ds_id, "scenario_id": sc_id, "gate": None, "cases": OrderedDict(), "bills": {},
-            "issues": OrderedDict(), "backscan_sent": False, "inject_failure": False, "overlays": [], "overlay_rev": 0}
+    return {"dataset_id": ds_id, "scenario_id": sc_id, "gate": None, "tickets": OrderedDict(), "bills": {},
+            "register": OrderedDict(), "backscan_sent": [], "inject_failure": False, "overlays": [], "overlay_rev": 0,
+            "notifications": [], "autopilot": None}
 
 
 class Store:
@@ -1132,7 +1112,8 @@ READ_TOOLS = ("get_case", "get_work_orders", "get_integration_messages", "get_to
               "get_meter", "get_service_agreement", "get_bill", "get_gl_period", "find_similar_premises")
 DETERMINISTIC_TOOLS = ("calculate_correction", "run_gate_on_bill")
 STEP_TOOLS = ("REPROCESS_INTEGRATION_MESSAGE", "STOP_SA", "CORRECT_MDM_READS", "REGENERATE_DRAFT_BILL", "CANCEL_DRAFT_BILL",
-              "CLOSE_TODO", "ADD_CRM_NOTE", "CORRECT_PREMISE_REFERENCE", "CREATE_FIELD_WORK_ORDER", "CREATE_CREDIT_MEMO")
+              "CLOSE_TODO", "ADD_CRM_NOTE", "CORRECT_PREMISE_REFERENCE", "CREATE_CREDIT_MEMO", "DRAFT_CUSTOMER_LETTER",
+              "DRAFT_REGULATOR_RESPONSE")
 TOOL_DESCRIPTIONS = {
     "get_case": "Case facts: type, account, SA, premise, meter, root disconnect work order, gates fired, bills.",
     "get_work_orders": "OMS work orders for a premise (point-in-time).",
@@ -1158,7 +1139,8 @@ def tool_specs(names):
 
 
 class ToolContext:
-    """Everything a tool may touch: the case, the scenario state and a fresh point-in-time (+sandbox) view."""
+    """Everything a tool may touch: the ticket, the scenario state and a fresh point-in-time (+sandbox) view.
+    (Tools keep the 'case' vocabulary of their contract - get_case - but operate on BEX tickets.)"""
 
     def __init__(self, engine, ds_id, sc_id, case_id):
         self.engine, self.ds_id, self.sc_id, self.case_id = engine, ds_id, sc_id, case_id
@@ -1169,7 +1151,7 @@ class ToolContext:
 
     @property
     def case(self):
-        return self.state["cases"][self.case_id]
+        return self.state["tickets"][self.case_id]
 
     @property
     def view(self):
@@ -1203,17 +1185,19 @@ def t_get_case(ctx, a):
     v = ctx.view
     msg = v.latest_msg(c["root_wo_id"])
     sa = v.sas.get(c["sa_id"], {})
-    out = _pick(c, ("case_id", "case_type", "scenario_id", "scenario_time", "bill_run_at", "account_id", "customer_name",
+    out = _pick(c, ("scenario_id", "scenario_time", "bill_run_at", "account_id", "customer_name",
                     "sa_id", "premise", "meter_id", "root_wo_id", "root_wo_premise", "disconnect_date", "wo_subtype", "window",
-                    "gates", "draft_bill_id", "issued_bill_ids", "unmatched_premise", "suggested_premise", "linked_case_ids"))
+                    "gates", "draft_bill_id", "issued_bill_ids", "unmatched_premise", "suggested_premise"))
+    out["case_id"], out["case_type"], out["linked_case_ids"] = c["ticket_id"], c["type"], c["linked_ticket_ids"]
     out["reads_available_until"] = v.reads_until()
     out["posting_period"] = v.posting_period()
     out["facts"] = {"msg_id": msg["msg_id"] if msg else None, "msg_status": msg["status"] if msg else "MISSING",
                     "sa_status": sa.get("sa_status"), "open_todo_ids": [t["todo_id"] for t in v.open_todos(c["root_wo_id"], c["sa_id"])],
                     "draft_action": (c.get("expected") or {}).get("action") if c.get("draft_bill_id") else None,
-                    "match_confirmed": (c.get("master_data") or {}).get("outcome") == "CONFIRMED",
-                    "wo_premise_now": (v.wos.get(c["root_wo_id"]) or {}).get("oms_premise_id")}
-    return out, "%s %s · %s · gates %s" % (c["case_type"], c["case_id"], c["customer_name"], ",".join(c["gates"]))
+                    "match_confirmed": (c.get("match") or {}).get("status") == "CONFIRMED",
+                    "wo_premise_now": (v.wos.get(c["root_wo_id"]) or {}).get("oms_premise_id"),
+                    "flag": bool(c.get("flag"))}
+    return out, "%s %s · %s · gates %s" % (c["type"], c["ticket_id"], c["customer_name"], ",".join(c["gates"]))
 
 
 def t_get_work_orders(ctx, a):
@@ -1316,9 +1300,9 @@ def t_find_similar_premises(ctx, a):
 
 # ---- deterministic tools ----------------------------------------------------------------------
 def option_impact(case, option_id):
-    """Financial impact of a playbook option, from the deterministic calculator results stored on the case."""
+    """Financial impact of a playbook option, from the deterministic calculator results stored on the ticket."""
     exp = case.get("expected") or {}
-    ct = case["case_type"]
+    ct = case["type"]
     if ct == "PREVENT":
         if option_id in ("CORRECT_AND_REBILL", "PROCESS_STOP_THEN_FINAL", "ZERO_DAYS_KEEP_FIXED"):
             return {"kind": "DRAFT_BILL", "bill_id": exp["bill_id"], "action": exp["action"], "before": exp["before"],
@@ -1332,13 +1316,10 @@ def option_impact(case, option_id):
             return {"kind": "ACCOUNT", "stop_effective": exp["stop_effective"], "reduction": 0.0, "protects_next_bill": True}
         return {"kind": "NONE", "reduction": 0.0}
     if ct == "REMEDIATE":
-        if option_id == "CREDIT_ISSUED_BILLS":
+        if option_id == "CREDIT_AND_NOTIFY":
             return {"kind": "CREDIT", "credit": exp["credit"], "bill_ids": exp["bill_ids"], "gl_period": exp.get("gl_period"),
                     "per_bill": [{"bill_id": l["bill_id"], "credit": l["credit"]} for l in exp.get("lines", [])]}
         return {"kind": "NONE", "credit": 0.0}
-    if option_id in ("DISPATCH_FIELD_CHECK", "OPEN_RP_CASE"):
-        return {"kind": "REVENUE_PROTECTION", "unbilled_kwh": exp.get("unbilled_kwh", 0.0),
-                "unbilled_value": exp.get("unbilled_value", 0.0), "reduction": 0.0}
     return {"kind": "NONE", "reduction": 0.0}
 
 
@@ -1500,7 +1481,7 @@ def c_close_todo(ctx, p):
 
 def s_add_crm_note(ctx, a):
     c = ctx.case
-    cid = "CASE-SBX-" + c["case_id"]
+    cid = "CASE-SBX-" + c["ticket_id"]
     acc = ctx.view.accounts.get(a.get("account_id"), {})
     ctx.overlay(F_CRM, cid, {"case_id": cid, "account_id": a.get("account_id"), "customer_name": acc.get("customer_name", ""),
                              "opened_at": c["scenario_time"], "channel": "SYSTEM", "category": "BILLING_CORRECTION", "subject": a.get("subject", ""),
@@ -1534,26 +1515,42 @@ def c_correct_premise(ctx, p):
     return ok, "Does %s now resolve through the crosswalk (%s)? %s" % (p["wo_id"], p["to_premise"], "yes" if ok else "no")
 
 
-def s_field_wo(ctx, a):
+def _draft_letter(ctx, kind, step):
+    """Write the investigation's drafted text (customer letter / regulator response) into the sandbox."""
     c = ctx.case
-    wid = "WO-SBX-" + c["case_id"]
-    ctx.overlay(F_WO, wid, {"wo_id": wid, "oms_premise_id": a.get("premise"), "wo_type": "METER_INSPECTION", "wo_subtype": "REVENUE_PROTECTION",
-                            "status": "OPEN", "created_at": c["scenario_time"], "completed_at": "", "technician_id": "",
-                            "notes": a.get("reason", "")}, "CREATE_FIELD_WORK_ORDER")
-    return {"ok": True, "wo_id": wid}, "Field work order %s created" % wid
+    lid = "LTR-%s-%s" % (c["ticket_id"], kind)
+    field = "customer_letter" if kind == "CUSTOMER" else "regulator_response"
+    text = (c.get("comms") or {}).get(field) or ((c.get("investigation") or {}).get("drafts") or {}).get(field) or ""
+    if not text:
+        raise ToolError("No %s draft is available for %s" % (field.replace("_", " "), c["ticket_id"]))
+    ctx.overlay(F_LETTER, lid, {"letter_id": lid, "ticket_id": c["ticket_id"], "account_id": c["account_id"], "kind": kind,
+                                "status": "DRAFTED", "text": text, "created_at": c["scenario_time"]}, step)
+    c["comms"][field] = text
+    return {"ok": True, "letter_id": lid}, "%s drafted (%d characters)" % (lid, len(text))
 
 
-def c_field_wo(ctx, p):
-    ok = ("WO-SBX-" + ctx.case_id) in ctx.view.wos
-    return ok, "Does field work order WO-SBX-%s exist? %s" % (ctx.case_id, "yes" if ok else "no")
+def s_customer_letter(ctx, a):
+    return _draft_letter(ctx, "CUSTOMER", "DRAFT_CUSTOMER_LETTER")
+
+
+def s_regulator_response(ctx, a):
+    return _draft_letter(ctx, "REGULATOR", "DRAFT_REGULATOR_RESPONSE")
+
+
+def _c_letter(kind):
+    def check(ctx, p):
+        lt = ctx.view.letters.get("LTR-%s-%s" % (ctx.case_id, kind), {})
+        ok = bool(lt.get("text"))
+        return ok, "Is the %s draft stored in the sandbox? %s" % ("customer letter" if kind == "CUSTOMER" else "regulator response", "yes" if ok else "no")
+    return check
 
 
 def s_credit_memo(ctx, a):
     c = ctx.case
-    mid = "CM-" + c["case_id"]
+    mid = "CM-" + c["ticket_id"]
     ctx.overlay(F_MEMO, mid, {"memo_id": mid, "account_id": a.get("account_id"), "sa_id": c["sa_id"], "bill_ids": " ".join(a.get("bill_ids") or []),
                               "amount": _f2(a.get("amount", 0.0)), "gl_period": a.get("gl_period"), "status": "POSTED_SANDBOX",
-                              "case_id": c["case_id"], "created_at": c["scenario_time"]}, "CREATE_CREDIT_MEMO")
+                              "ticket_id": c["ticket_id"], "created_at": c["scenario_time"]}, "CREATE_CREDIT_MEMO")
     return {"ok": True, "memo_id": mid}, "Credit memo %s %s posted to %s" % (mid, fmt_money(a.get("amount", 0.0)), a.get("gl_period"))
 
 
@@ -1569,8 +1566,9 @@ STEP_IMPL = {
     "REPROCESS_INTEGRATION_MESSAGE": (s_reprocess, c_reprocess), "STOP_SA": (s_stop_sa, c_stop_sa),
     "CORRECT_MDM_READS": (s_correct_reads, c_correct_reads), "REGENERATE_DRAFT_BILL": (s_regenerate, c_regenerate),
     "CANCEL_DRAFT_BILL": (s_cancel, c_cancel), "CLOSE_TODO": (s_close_todo, c_close_todo), "ADD_CRM_NOTE": (s_add_crm_note, c_add_crm_note),
-    "CORRECT_PREMISE_REFERENCE": (s_correct_premise, c_correct_premise), "CREATE_FIELD_WORK_ORDER": (s_field_wo, c_field_wo),
-    "CREATE_CREDIT_MEMO": (s_credit_memo, c_credit_memo),
+    "CORRECT_PREMISE_REFERENCE": (s_correct_premise, c_correct_premise), "CREATE_CREDIT_MEMO": (s_credit_memo, c_credit_memo),
+    "DRAFT_CUSTOMER_LETTER": (s_customer_letter, _c_letter("CUSTOMER")),
+    "DRAFT_REGULATOR_RESPONSE": (s_regulator_response, _c_letter("REGULATOR")),
 }
 READ_IMPL = {
     "get_case": t_get_case, "get_work_orders": t_get_work_orders, "get_integration_messages": t_get_integration_messages,
@@ -1611,30 +1609,23 @@ class ClaudeLLMClient(LLMClient):
         raise NotImplementedError("ClaudeLLMClient is a stub; set config/agent.json mode to 'mock'.")
 
 
-SIGNAL_PHRASES = ("disconnect", "no further charges", "moved", "returned", "lights on", "occupied", "still on", "dispute")
+SIGNAL_PHRASES = ("disconnect", "no further charges", "moved", "returned", "dispute")
 OPTION_RATIONALE = {
     "CORRECT_AND_REBILL": "Stop the SA at the disconnect date, zero the estimated post-disconnect reads and regenerate or cancel the bill.",
-    "HOLD_FIELD_VERIFICATION": "Keep the bill held until field operations confirm the supply is physically off.",
-    "RELEASE_AS_IS": "Issue the bill unchanged; only appropriate if the disconnect record is shown to be wrong.",
+    "RELEASE_AS_IS": "Issue the bill unchanged (override); only appropriate if the disconnect record is shown to be wrong.",
     "PROCESS_STOP_THEN_FINAL": "Process the delayed stop now and reissue the draft as a prorated final bill.",
-    "DEFER_TO_NEXT_RUN": "Leave the bill held and correct it in the next run.",
+    "DEFER_TO_NEXT_RUN": "Keep the bill held and correct it in the next run (override).",
     "ZERO_DAYS_KEEP_FIXED": "Zero consumption for the non-pay disconnected days; fixed charges stay per tariff.",
-    "DISPATCH_FIELD_CHECK": "Send a field check to confirm the disconnect and inspect for tamper.",
-    "OPEN_RP_CASE": "Record a revenue-protection case without a field visit.",
-    "NO_ACTION": "Take no action; requires a written reason.",
-    "CREDIT_ISSUED_BILLS": "Post a credit memo for the post-disconnect charges on bills already issued.",
-    "NO_CREDIT": "Do not credit; requires a written reason.",
+    "CREDIT_AND_NOTIFY": "Post a credit memo in the open GL period, add a CRM note and send the customer letter (and regulator response if flagged).",
 }
 CAUSE_LABELS = {"C1": "No integration mapping", "C2": "Integration failure", "C3": "ID mismatch",
                 "C6": "Bill would run before stop is processed", "C4+C5": "Non-pay keeps SA active by design; MDM estimated while disconnected",
-                "TAMPER": "Possible failed disconnect or tamper", "OTHER": "Unclassified - manual review"}
+                "OTHER": "Unclassified - manual review"}
 
 
 def select_playbook(playbooks, case_type, cause, gates):
     if case_type == "REMEDIATE":
         return "REMEDIATE"
-    if case_type == "REVENUE_PROTECTION":
-        return "REVENUE_PROTECTION"
     if "G5" in (gates or []) or cause == "C3":
         return "ID_MISMATCH"
     for pid, pb in playbooks.items():
@@ -1742,8 +1733,6 @@ class MockLLMClient(LLMClient):
             cause, label = "C6", "Bill would run before stop is processed"
         elif subtype == "NONPAY" and est:
             cause, label = "C4+C5", CAUSE_LABELS["C4+C5"]
-        elif case["gates"] == ["G6"]:
-            cause, label = "TAMPER", CAUSE_LABELS["TAMPER"]
         elif status in ("ERROR", "MISSING"):
             cause, label = "C2", "Integration failure (%s)" % (err or status.lower())
         else:
@@ -1840,11 +1829,12 @@ class MockLLMClient(LLMClient):
                 return "bill %s %s → %s" % (i["bill_id"], fmt_money(i["before"]), "cancelled" if i["action"] == "CANCEL" else fmt_money(i["after"]))
             if k == "CREDIT":
                 return "credit %s on %s" % (fmt_money(i["credit"]), ", ".join(i["bill_ids"]))
-            if k == "REVENUE_PROTECTION":
-                return "%s kWh unbilled since the disconnect" % fmt_kwh(i["unbilled_kwh"])
             if k == "ACCOUNT":
                 return "SA stopped effective %s so the next bill is correct" % i["stop_effective"]
             return "no financial change"
+        rec_label = rec_opt["label"]
+        if case["case_type"] == "ADVANCE" and rec_opt["option_id"] == "CORRECT_AND_REBILL":
+            rec_label = "%s (stop SA effective %s)" % (rec_opt["label"], dd)
         cust = case["customer_name"]
         s = ["%s (%s) had a %s disconnect completed on %s (%s)." % (cust, case["account_id"], case["wo_subtype"], dd, case["root_wo_id"])]
         ct = case["case_type"]
@@ -1854,29 +1844,24 @@ class MockLLMClient(LLMClient):
                      " on %d ESTIMATED reads" % len(an["est"]) if an["est"] else ""))
         elif ct == "ADVANCE":
             s.append("The SA is still %s at the bill run, so the next bill would charge for days after the disconnect." % sa["sa_status"])
-        elif ct == "REMEDIATE":
-            s.append("Issued bill(s) %s charged for post-disconnect days." % ", ".join(b["bill_id"] for b in an["bills"] if b["state"] == "ISSUED"))
         else:
-            s.append("Since then the meter has recorded %s kWh of ACTUAL consumption while the SA is %s." % (
-                fmt_kwh(sum(num(r["kwh"]) for r in an["act"])), sa["sa_status"]))
+            s.append("Issued bill(s) %s charged for post-disconnect days." % ", ".join(b["bill_id"] for b in an["bills"] if b["state"] == "ISSUED"))
         s.append("Probable cause: %s - %s." % (an["cause"], an["label"]))
         if an["corroborating"]:
             s.append("OMS recorded premise %s; crosswalk premise %s matches it and its reads turn ESTIMATED on %s." % (
                 case["root_wo_premise"], an["cand"]["premise"], an["corroborating"]["read_date"]))
         elif an["crm_hits"]:
             s.append("CRM %s supports this." % an["crm_hits"][0][0]["case_id"])
-        s.append("Recommended: %s (%s)." % (rec_opt["label"], impact_text(rec_imp)))
+        s.append("Recommended: %s (%s)." % (rec_label, impact_text(rec_imp)))
         s = s[:5]
 
         oq = []
         if "G5" in case["gates"]:
-            oq.append("Master data: confirm that OMS premise %s is %s." % (case["root_wo_premise"], (an["cand"] or {}).get("premise")))
+            oq.append("Analyst: confirm that OMS premise %s is %s before the ticket leaves triage." % (case["root_wo_premise"], (an["cand"] or {}).get("premise")))
         if an["cause"] in ("C1", "C2", "C3"):
-            oq.append("Integration: is the root cause of %s fixed so later disconnects reach CC&B?" % ((msg or {}).get("msg_id") or case["root_wo_id"]))
+            oq.append("Root-cause register: is %s's integration error being fixed by engineering?" % ((msg or {}).get("msg_id") or case["root_wo_id"]))
         if an["cause"] == "C6":
             oq.append("Should the bill run wait for pending stop messages in the retry queue?")
-        if an["cause"] == "TAMPER":
-            oq.append("Field: is the supply physically isolated, or is the meter recording a bypass?")
         if an["todos"]:
             oq.append("Why was %s not worked?" % an["todos"][0]["todo_id"])
 
@@ -1890,10 +1875,8 @@ class MockLLMClient(LLMClient):
                     rec_imp["bill_id"], fmt_money(rec_imp["after"]), fmt_money(rec_imp["before"])))
         elif ct == "REMEDIATE" and rec_imp.get("kind") == "CREDIT":
             letter.append("We will credit your account %s for charges after the disconnection on bill(s) %s." % (fmt_money(rec_imp["credit"]), ", ".join(rec_imp["bill_ids"])))
-        elif ct == "ADVANCE":
-            letter.append("We have closed your account effective %s, so you will not be billed for any later days." % dd)
         else:
-            letter.append("Our meter is still recording usage at the property, so we will arrange a visit to check the supply.")
+            letter.append("We have closed your account effective %s, so you will not be billed for any later days." % dd)
         letter += ["We apologise for the inconvenience.", "", "Utilico Energy Customer Care"]
         drafts = {"customer_letter": "\n".join(letter)}
         if an["regulatory"]:
@@ -1903,9 +1886,9 @@ class MockLLMClient(LLMClient):
                 "Facts: the supply was disconnected on %s (OMS %s). %s" % (dd, case["root_wo_id"], s[1]),
                 "Cause: %s - %s." % (an["cause"], an["label"]),
                 "Remediation: %s; %s." % (rec_opt["label"], impact_text(rec_imp)),
-                "All evidence references are listed in case %s." % case["case_id"]])
+                "All evidence references are listed in ticket %s." % case["case_id"]])
         return {"case_id": case["case_id"], "summary": " ".join(s), "probable_cause": an["cause"], "probable_cause_label": an["label"],
-                "evidence": ev, "options": options, "recommended_option": rec_opt["option_id"], "recommended_label": rec_opt["label"],
+                "evidence": ev, "options": options, "recommended_option": rec_opt["option_id"], "recommended_label": rec_label,
                 "confidence": an["confidence"], "confidence_signals": an["signals"], "open_questions": oq, "drafts": drafts,
                 "regulatory_flag": bool(an["regulatory"]), "playbook_id": pid}
 
@@ -1962,11 +1945,13 @@ class MockLLMClient(LLMClient):
                     add(st, {"todo_id": tid}, "Is %s COMPLETE?" % tid)
             elif st == "ADD_CRM_NOTE":
                 add(st, {"account_id": case["account_id"], "subject": "%s: %s" % (case["case_type"].title(), opt["label"]),
-                         "note": "Case %s: %s applied after %s disconnect %s on %s." % (case["case_id"], opt["label"], case["wo_subtype"], case["root_wo_id"], case["disconnect_date"])},
+                         "note": "Ticket %s: %s applied after %s disconnect %s on %s." % (case["case_id"], opt["label"], case["wo_subtype"], case["root_wo_id"], case["disconnect_date"])},
                     "Does the CRM note exist?")
-            elif st == "CREATE_FIELD_WORK_ORDER":
-                add(st, {"premise": case["premise"], "reason": "Revenue protection: actual consumption after disconnect %s; verify isolation / tamper." % case["root_wo_id"]},
-                    "Does the field work order exist?")
+            elif st == "DRAFT_CUSTOMER_LETTER":
+                add(st, {"ticket_id": case["case_id"]}, "Is the customer letter drafted in the sandbox?")
+            elif st == "DRAFT_REGULATOR_RESPONSE":
+                if f.get("flag"):                      # only when a dispute / regulatory flag applies
+                    add(st, {"ticket_id": case["case_id"]}, "Is the regulator response drafted in the sandbox?")
             elif st == "CREATE_CREDIT_MEMO":
                 imp = next((o["impact"] for o in calc if o["option_id"] == opt["option_id"]), {})
                 add(st, {"account_id": case["account_id"], "bill_ids": imp.get("bill_ids", []), "amount": imp.get("credit", 0.0),
@@ -2119,48 +2104,184 @@ def validate_investigation(view, out, runner):
 
 
 # =============================================================================================
-# SECTION 13 - CASE WORKFLOW ENGINE
-#   DETECTED -> INVESTIGATED -> [MASTER_DATA_REVIEW] -> DRI_DECISION -> [FIELD_VERIFICATION] -> [FINANCE_APPROVAL]
-#   -> PLAN_APPROVAL -> EXECUTING -> VERIFYING -> [REGULATORY_REVIEW] -> READY_TO_RELEASE -> RESOLVED
-#   side exits: RETURNED_TO_DRI, CLOSED_NO_ACTION
+# SECTION 13 - BUSINESS CALENDAR, DEMO CLOCK, PRIORITY, DoA  (workflow_rules.md v2.0 §7, §9)
 # =============================================================================================
-STATES = ["DETECTED", "INVESTIGATED", "MASTER_DATA_REVIEW", "DRI_DECISION", "FIELD_VERIFICATION", "FINANCE_APPROVAL",
-          "PLAN_APPROVAL", "EXECUTING", "VERIFYING", "REGULATORY_REVIEW", "READY_TO_RELEASE", "RESOLVED",
-          "RETURNED_TO_DRI", "CLOSED_NO_ACTION"]
-TERMINAL = ("RESOLVED", "CLOSED_NO_ACTION")
-STATE_OWNER = {"MASTER_DATA_REVIEW": "MASTER_DATA", "DRI_DECISION": "DRI", "RETURNED_TO_DRI": "DRI", "FIELD_VERIFICATION": "FIELD_OPS",
-               "FINANCE_APPROVAL": "FINANCE", "PLAN_APPROVAL": "DRI", "REGULATORY_REVIEW": "REGULATORY", "READY_TO_RELEASE": "BILLING_OPS"}
 SYSTEM_ACTORS = {"sys.gate": ("SYSTEM", "Pre-bill gate"), "agent.investigator": ("AGENT", "Investigation agent"),
                  "agent.executor": ("AGENT", "Execution agent"), "sys.verifier": ("SYSTEM", "Verifier"),
-                 "sys.cli": ("SYSTEM", "Command line")}
-TYPE_ORDER = {"PREVENT": 0, "ADVANCE": 1, "REMEDIATE": 2, "REVENUE_PROTECTION": 3}
-FIELD_OUTCOMES = ("DISCONNECT_CONFIRMED", "SERVICE_FOUND_CONNECTED", "METER_FAULT", "SUSPECTED_TAMPER")
-DRI_STATES = ("DRI_DECISION", "RETURNED_TO_DRI")
-# action -> (roles allowed, states allowed)
-ACTIONS = {
-    "CONFIRM_MATCH": (("MASTER_DATA",), ("MASTER_DATA_REVIEW",)),
-    "REJECT_MATCH": (("MASTER_DATA",), ("MASTER_DATA_REVIEW",)),
-    "DECIDE": (("DRI",), DRI_STATES),
-    "CLOSE_NO_ACTION": (("DRI",), DRI_STATES + ("PLAN_APPROVAL",)),
-    "FIELD_OUTCOME": (("FIELD_OPS",), ("FIELD_VERIFICATION",)),
-    "FINANCE_APPROVE": (("FINANCE",), ("FINANCE_APPROVAL",)),
-    "FINANCE_REJECT": (("FINANCE",), ("FINANCE_APPROVAL",)),
-    "APPROVE_PLAN": (("DRI",), ("PLAN_APPROVAL",)),
-    "REJECT_PLAN": (("DRI",), ("PLAN_APPROVAL",)),
-    "EDIT_COMMS": (("REGULATORY",), ("REGULATORY_REVIEW",)),
-    "APPROVE_COMMS": (("REGULATORY",), ("REGULATORY_REVIEW",)),
-    "REJECT_COMMS": (("REGULATORY",), ("REGULATORY_REVIEW",)),
+                 "sys.cli": ("SYSTEM", "System (startup / command line)")}
+TYPE_ORDER = {"PREVENT": 0, "ADVANCE": 1, "REMEDIATE": 2}
+PRIORITIES = ["P1", "P2", "P3", "P4"]
+IMPACT_ORDER = ["Low", "Medium", "High"]
+MATRIX = {("High", "High"): "P1", ("High", "Medium"): "P2", ("Medium", "High"): "P2", ("Medium", "Medium"): "P3",
+          ("Low", "High"): "P3", ("Low", "Medium"): "P4"}
+TS_FMT = "%Y-%m-%dT%H:%M:%S"
+
+
+def ts(dt):
+    return dt.strftime(TS_FMT) if dt else None
+
+
+def pts(s):
+    return datetime.strptime(s[:19], TS_FMT) if s else None
+
+
+class Clock:
+    """Local wall-clock time plus a demo offset (hours). The offset affects SLA calculations only.
+    The self-test injects a fixed base time so SLA checks are deterministic."""
+
+    def __init__(self, path=None, base=None):
+        self.path, self.base, self.offset_h = path, base, 0.0
+        if path and os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    self.offset_h = float(json.load(fh).get("offset_hours", 0))
+            except (OSError, ValueError):
+                self.offset_h = 0.0
+
+    def now(self):
+        return (self.base or datetime.now().replace(microsecond=0)) + timedelta(hours=self.offset_h)
+
+    def advance(self, hours):
+        self.offset_h += hours
+        if self.path:
+            write_json_atomic(self.path, {"offset_hours": self.offset_h})
+
+    def reset(self):
+        self.offset_h = 0.0
+        if self.path and os.path.exists(self.path):
+            os.remove(self.path)
+
+
+class BizCal:
+    """Business-hours arithmetic: Mon-Fri 08:00-17:00 local (config/sla.json). One business day = one full working day."""
+
+    def __init__(self, cfg):
+        bh = cfg["business_hours"]
+        self.days = set(bh["days"])
+        self.h0 = int(bh["start"][:2]) * 60 + int(bh["start"][3:])
+        self.h1 = int(bh["end"][:2]) * 60 + int(bh["end"][3:])
+        self.day_h = (self.h1 - self.h0) / 60.0
+
+    def _open(self, d):
+        return d.replace(hour=self.h0 // 60, minute=self.h0 % 60, second=0)
+
+    def _close(self, d):
+        return d.replace(hour=self.h1 // 60, minute=self.h1 % 60, second=0)
+
+    def _norm_fwd(self, t):
+        while True:
+            if t.weekday() in self.days and t < self._close(t):
+                return max(t, self._open(t))
+            t = self._open(t + timedelta(days=1))
+
+    def _norm_back(self, t):
+        while True:
+            if t.weekday() in self.days and t > self._open(t):
+                return min(t, self._close(t))
+            t = self._close(t - timedelta(days=1))
+
+    def add_hours(self, t, hours):
+        rem = hours * 3600.0
+        t = self._norm_fwd(t)
+        while True:
+            avail = (self._close(t) - t).total_seconds()
+            if rem <= avail:
+                return t + timedelta(seconds=rem)
+            rem -= avail
+            t = self._norm_fwd(self._open(t + timedelta(days=1)))
+
+    def sub_hours(self, t, hours):
+        rem = hours * 3600.0
+        t = self._norm_back(t)
+        while True:
+            avail = (t - self._open(t)).total_seconds()
+            if rem <= avail:
+                return t - timedelta(seconds=rem)
+            rem -= avail
+            t = self._norm_back(self._close(t - timedelta(days=1)))
+
+    def add_days(self, t, days):
+        return self.add_hours(t, days * self.day_h)
+
+    def sub_days(self, t, days):
+        return self.sub_hours(t, days * self.day_h)
+
+    def elapsed(self, a, b):
+        """Business hours between a and b (0 if b <= a)."""
+        if b <= a:
+            return 0.0
+        total, d = 0.0, a
+        while d.date() <= b.date():
+            if d.weekday() in self.days:
+                s, e = max(self._open(d), a), min(self._close(d), b)
+                if e > s:
+                    total += (e - s).total_seconds()
+            d = (d + timedelta(days=1)).replace(hour=0, minute=0, second=0)
+        return total / 3600.0
+
+
+def compute_priority(t, app_cfg):
+    """Impact x urgency (§9). Amount = the ticket's own reduction / credit. The bills modifier counts the bills affected by
+    the same cause on this ticket: a PREVENT ticket's held bill plus its linked issued bills; a REMEDIATE ticket's own bills."""
+    amt, flag = t["amount"], bool(t["flag"])
+    if amt >= app_cfg.get("impact_high_min", 1000.0) or flag:
+        impact = "High"
+    elif amt >= app_cfg.get("impact_medium_min", 250.0):
+        impact = "Medium"
+    else:
+        impact = "Low"
+    if t["bills_affected"] >= app_cfg.get("bills_modifier_min", 3) and impact != "High":
+        impact = IMPACT_ORDER[IMPACT_ORDER.index(impact) + 1]
+    urgency = "High" if t["type"] == "PREVENT" or flag else "Medium"
+    return impact, urgency, MATRIX[(impact, urgency)]
+
+
+def doa_level(t, app_cfg, override=False):
+    """§7: L0 = Analyst alone (amount < $50, recommended option, no flag, PREVENT/ADVANCE); L2 = DRI + Finance
+    (pre-issue reduction >= $1,000 or any REMEDIATE); L1 = DRI otherwise. Overrides go to the DRI (+ Finance if >= $1,000)."""
+    amt, thr = t["amount"], app_cfg.get("finance_threshold", 1000.0)
+    if t["type"] == "REMEDIATE" or amt >= thr:
+        return "L2"
+    if override:
+        return "L1"
+    if amt < app_cfg.get("l0_max_amount", 50.0) and not t["flag"] and t["type"] in ("PREVENT", "ADVANCE"):
+        return "L0"
+    return "L1"
+
+
+# =============================================================================================
+# SECTION 14 - BEX TICKET ENGINE (lifecycle from config/workflow.json; SoD and DoA enforced here)
+# =============================================================================================
+ACTION_PERSONAS = {          # who may even attempt each action (state, DoA and SoD are checked afterwards)
+    "CONFIRM_MATCH": ("BILLING_OPS",), "REJECT_MATCH": ("BILLING_OPS",), "CHANGE_PRIORITY": ("BILLING_OPS",),
+    "CONFIRM_TRIAGE": ("BILLING_OPS",), "REQUEST_CANCELLATION": ("BILLING_OPS",),
+    "APPROVE_CANCELLATION": ("DRI",), "DECLINE_CANCELLATION": ("DRI",), "CANCEL_DUPLICATE": ("DRI",),
+    "DECIDE": ("BILLING_OPS", "DRI"), "FINANCE_APPROVE": ("FINANCE",), "FINANCE_REJECT": ("FINANCE",),
+    "APPROVE_PLAN": ("BILLING_OPS", "DRI"), "RETURN_PLAN": ("BILLING_OPS", "DRI"),
+    "EDIT_COMMS": ("DRI",), "APPROVE_COMMS": ("DRI",), "RELEASE": ("BILLING_OPS",), "REOPEN": ("DRI",), "L0_REVIEW": ("DRI",),
 }
-REASON_REQUIRED = ("REJECT_MATCH", "CLOSE_NO_ACTION", "FINANCE_REJECT", "REJECT_PLAN", "REJECT_COMMS")
+ACTION_STATES = {
+    "CONFIRM_MATCH": ("TRIAGE",), "REJECT_MATCH": ("TRIAGE",), "CHANGE_PRIORITY": ("TRIAGE",), "CONFIRM_TRIAGE": ("TRIAGE",),
+    "REQUEST_CANCELLATION": ("TRIAGE",), "APPROVE_CANCELLATION": ("TRIAGE",), "DECLINE_CANCELLATION": ("TRIAGE",),
+    "CANCEL_DUPLICATE": ("AWAITING_DECISION",), "DECIDE": ("AWAITING_DECISION",), "FINANCE_APPROVE": ("PENDING_FINANCE",),
+    "FINANCE_REJECT": ("PENDING_FINANCE",), "APPROVE_PLAN": ("PLAN_APPROVAL",), "RETURN_PLAN": ("PLAN_APPROVAL",),
+    "EDIT_COMMS": ("COMMS_APPROVAL",), "APPROVE_COMMS": ("COMMS_APPROVAL",), "RELEASE": ("READY_TO_RELEASE",), "REOPEN": ("RESOLVED",),
+    "L0_REVIEW": None,
+}
+REASON_ACTIONS = ("REJECT_MATCH", "CHANGE_PRIORITY", "REQUEST_CANCELLATION", "APPROVE_CANCELLATION", "CANCEL_DUPLICATE",
+                  "FINANCE_REJECT", "RETURN_PLAN", "REOPEN")
+AGENT_STATES = ("NEW", "INVESTIGATING", "IN_PROGRESS", "VERIFYING")
+DONE_STATES = ("RESOLVED", "CLOSED", "CANCELLED")
+_AP = threading.local()      # demo autopilot marker for the current thread
 
 
 class Engine:
-    def __init__(self, cfg, registry, store, audit, latency_ms=None, sync=False):
+    def __init__(self, cfg, registry, store, audit, latency_ms=None, sync=False, clock=None):
         self.cfg, self.registry, self.store, self.audit = cfg, registry, store, audit
         self.latency_override, self.sync = latency_ms, sync
+        self.clock = clock or Clock()
         self.lock = threading.RLock()
         self._views = {}
-        self.threads = []
 
     # ---- basics ----------------------------------------------------------------------------
     def scenario(self, ds_id, sc_id):
@@ -2184,6 +2305,9 @@ class Engine:
                 self._views[key] = v
             return v
 
+    def cal(self):
+        return BizCal(self.cfg.sla())
+
     def latency_s(self):
         ms = self.latency_override if self.latency_override is not None else self.cfg.agent().get("step_latency_ms", 0)
         return max(0, ms) / 1000.0
@@ -2202,10 +2326,10 @@ class Engine:
             t, n = SYSTEM_ACTORS[actor_id]
             return t, actor_id, n, None
         u = self.cfg.user(actor_id)
-        return ("USER", actor_id, u["name"], u["role"]) if u else ("USER", actor_id or "unknown", actor_id or "unknown", None)
+        return ("USER", actor_id, u["name"], u["persona"]) if u else ("USER", actor_id or "unknown", actor_id or "unknown", None)
 
-    def log(self, ds_id, sc_id, actor_id, action, object_type=None, object_id=None, case_id=None, before=None, after=None, reason=None):
-        at, aid, name, role = self.actor(actor_id)
+    def log(self, ds_id, sc_id, actor_id, action, object_type=None, object_id=None, ticket_id=None, before=None, after=None, reason=None):
+        at, aid, name, persona = self.actor(actor_id)
         sct = None
         if ds_id and sc_id:
             try:
@@ -2216,128 +2340,300 @@ class Engine:
         if at == "AGENT":
             cls = LLM_CLIENTS.get(self.cfg.agent().get("mode"))
             mode = cls.AGENT_MODE if cls else "MOCK"
+        ap = bool(getattr(_AP, "on", False)) and at == "USER"
+        if ap and not reason:
+            reason = "performed by demo autopilot"
         return self.audit.append({"scenario_time": sct, "dataset_id": ds_id, "scenario_id": sc_id, "actor_type": at, "actor_id": aid,
-                                  "actor_name": name, "actor_role": role, "action": action, "object_type": object_type,
-                                  "object_id": object_id, "case_id": case_id, "before": before, "after": after, "reason": reason,
-                                  "agent_mode": mode})
+                                  "actor_name": name, "actor_persona": persona, "action": action, "object_type": object_type,
+                                  "object_id": object_id, "ticket_id": ticket_id, "before": before, "after": after, "reason": reason,
+                                  "agent_mode": mode, "autopilot": ap})
+
+    def deny(self, u, ds_id, sc_id, what, ticket_id=None):
+        self.log(ds_id, sc_id, u["user_id"], "PERMISSION_DENIED", "ticket" if ticket_id else "screen", ticket_id or what, ticket_id,
+                 reason="%s (%s) may not %s" % (u["name"], u["persona"], what))
+        raise PermissionDenied("%s may not %s" % (u["persona"], what))
 
     def require(self, u, screen, levels, ds_id=None, sc_id=None, what=""):
-        lvl = self.cfg.level(u["role"], screen)
-        if lvl not in levels:
-            self.log(ds_id, sc_id, u["user_id"], "PERMISSION_DENIED", "screen", screen,
-                     reason="%s (%s) may not %s" % (u["name"], u["role"], what or "access " + screen))
-            raise PermissionDenied("%s may not %s" % (u["role"], what or "access " + screen))
-        return lvl
+        if self.cfg.level(u["persona"], screen) not in levels:
+            self.deny(u, ds_id, sc_id, what or "access " + screen)
 
     def _save(self, ds_id, sc_id):
         try:
             self.store.save(ds_id, sc_id)
-        except OSError as e:            # never let a persistence hiccup break the workflow; state stays in memory
+        except OSError as e:
             sys.stderr.write("  [warn] could not persist state for %s/%s: %s\n" % (ds_id, sc_id, e))
 
     def _spawn(self, fn, *args):
         if self.sync:
             fn(*args)
         else:
-            th = threading.Thread(target=fn, args=args, daemon=True)
-            self.threads.append(th)
+            th = threading.Thread(target=self._guarded, args=(fn,) + args, daemon=True)
             th.start()
 
-    def _to(self, ds_id, sc_id, case, new_state, actor_id, reason=None):
-        old = case["state"]
-        case["state"] = new_state
-        case["history"].append({"state": new_state, "at": now_utc(), "by": actor_id})
-        owner = STATE_OWNER.get(new_state)
-        if owner and owner not in case["roles_involved"]:
-            case["roles_involved"].append(owner)
-        action = "CASE_CLOSED" if new_state in TERMINAL else "ROUTED"
-        self.log(ds_id, sc_id, actor_id, action, "case", case["case_id"], case["case_id"], {"state": old}, {"state": new_state}, reason)
+    def _guarded(self, fn, *args):
+        try:
+            fn(*args)
+        except Exception:
+            traceback.print_exc()
 
-    def _case(self, ds_id, sc_id, case_id):
-        c = self.store.get(ds_id, sc_id)["cases"].get(case_id)
-        if not c:
-            raise NotFound("Unknown case: %s" % case_id)
-        return c
+    def _ticket(self, ds_id, sc_id, tid):
+        t = self.store.get(ds_id, sc_id)["tickets"].get(tid)
+        if not t:
+            raise NotFound("Unknown ticket: %s" % tid)
+        return t
 
-    def playbook_id(self, case):
-        inv = case.get("investigation") or {}
-        return inv.get("playbook_id") or select_playbook(self.cfg.playbooks(), case["case_type"], inv.get("probable_cause"), case["gates"])
+    def playbook_id(self, t):
+        inv = t.get("investigation") or {}
+        return inv.get("playbook_id") or select_playbook(self.cfg.playbooks(), t["type"], inv.get("probable_cause"), t["gates"])
 
-    # ---- case creation -------------------------------------------------------------------
-    def _create_cases(self, ds_id, sc_id, sc, view, seeds, actor_id, reason):
+    # ---- lifecycle (data-driven) -------------------------------------------------------------
+    def _transition(self, ds_id, sc_id, t, to, actor_id, action, reason=None, extra=None):
+        """Apply a transition from config/workflow.json, or refuse it. Logs `action` with before/after state."""
+        wf = self.cfg.workflow()
+        tr = next((x for x in wf["transitions"] if x["from"] == t["state"] and x["to"] == to), None)
+        if not tr:
+            raise AppError("Transition %s -> %s is not in the workflow table" % (t["state"], to))
+        if actor_id in SYSTEM_ACTORS:
+            if actor_id not in tr.get("actors", []):
+                raise PermissionDenied("%s may not make transition %s (SoD-1)" % (actor_id, tr["id"]))
+        else:
+            u = self.user(actor_id)
+            if u["persona"] not in tr.get("personas", []):
+                self.deny(u, ds_id, sc_id, "make transition %s (%s -> %s)" % (tr["id"], t["state"], to), t["ticket_id"])
+        if tr.get("reason") and not (reason or "").strip():
+            raise AppError("A written reason is required (SoD-5).")
+        old = t["state"]
+        now = self.clock.now()
+        t["state"] = to
+        t["history"].append({"from": old, "to": to, "transition": tr["id"], "by": actor_id, "at": ts(now), "at_utc": now_utc(),
+                             "autopilot": bool(getattr(_AP, "on", False))})
+        if to == "AWAITING_DECISION" and old not in ("TRIAGE",):
+            t["returned"] = True
+        sla = t["sla"]
+        if actor_id not in SYSTEM_ACTORS and not sla["first_action"].get("met_at"):
+            sla["first_action"]["met_at"] = ts(now)
+        if old == "PENDING_FINANCE" and sla.get("finance"):
+            sla["finance"]["met_at"] = ts(now)
+        if to == "PENDING_FINANCE":
+            sla["finance"] = self._clock_entry(now, self.cal().add_days(now, self.cfg.sla()["finance_step_business_days"]))
+        if to in DONE_STATES and not sla["resolve"].get("met_at"):
+            sla["resolve"]["met_at"] = ts(now)
+        if to == "RESOLVED":
+            t["resolved_at"] = ts(now)
+        if to == "AWAITING_DECISION" and old == "RESOLVED":
+            sla["resolve"]["met_at"] = None
+            t["closure_code"] = None
+        after = {"state": to}
+        after.update(extra or {})
+        self.log(ds_id, sc_id, actor_id, action, "ticket", t["ticket_id"], t["ticket_id"], {"state": old}, after, reason)
+        return tr
+
+    # ---- SLA --------------------------------------------------------------------------------
+    def _clock_entry(self, start, due):
+        return {"start": ts(start), "due": ts(due), "met_at": None, "warned": False, "escalated": False}
+
+    def _set_sla(self, t, start=None):
+        """(Re)compute SLA dues for the ticket's current priority, applying the deadline overrides (§9)."""
+        sc, cal, now = self.cfg.sla(), self.cal(), self.clock.now()
+        sla = t["sla"]
+        start = start or pts(sla["started_at"])
+        tg = sc["targets"][t["priority"]]
+        fa_due = cal.add_hours(start, tg["first_action_hours"]) if "first_action_hours" in tg else cal.add_days(start, tg["first_action_business_days"])
+        rs_due = cal.add_days(start, tg["resolve_business_days"])
+        if sla.get("held_deadline"):
+            rs_due = min(rs_due, pts(sla["held_deadline"]))
+        if sla.get("advance_deadline"):
+            rs_due = min(rs_due, pts(sla["advance_deadline"]))
+        fa, rs = sla.get("first_action") or {}, sla.get("resolve") or {}
+        sla["first_action"] = dict(self._clock_entry(start, fa_due), met_at=fa.get("met_at"), warned=fa.get("warned", False), escalated=fa.get("escalated", False))
+        sla["resolve"] = dict(self._clock_entry(start, rs_due), met_at=rs.get("met_at"), warned=rs.get("warned", False), escalated=rs.get("escalated", False))
+
+    def assignee(self, t):
+        s = t["state"]
+        if s in ("TRIAGE", "READY_TO_RELEASE"):
+            return "BILLING_OPS"
+        if s == "AWAITING_DECISION":     # returned tickets (failures, rejections, reopens) always go to the DRI
+            return "BILLING_OPS" if t.get("doa_level") == "L0" and not t.get("returned") else "DRI"
+        if s == "PENDING_FINANCE":
+            return "FINANCE"
+        if s == "PLAN_APPROVAL":
+            d = t.get("decision") or {}
+            u = self.cfg.user(d.get("by")) if d.get("by") else None
+            return u["persona"] if u else "DRI"
+        return "DRI"          # owner of every ticket (agents' states, COMMS_APPROVAL, RESOLVED)
+
+    def tick(self):
+        """SLA warnings / escalations, held-bill auto-P1 and auto-close. Called periodically and after clock changes."""
+        with self.lock:
+            for (ds_id, sc_id), st in list(self.store.mem.items()):
+                changed = False
+                for t in st["tickets"].values():
+                    changed |= self._tick_ticket(ds_id, sc_id, st, t)
+                if changed:
+                    self._save(ds_id, sc_id)
+
+    def _tick_ticket(self, ds_id, sc_id, st, t):
+        now, cal, sc = self.clock.now(), self.cal(), self.cfg.sla()
+        sla, changed = t["sla"], False
+        if t["state"] == "RESOLVED" and t.get("resolved_at"):
+            if now >= cal.add_days(pts(t["resolved_at"]), sc["auto_close_business_days"]):
+                self._transition(ds_id, sc_id, t, "CLOSED", "sys.gate", "TICKET_CLOSED", None, {"closure_code": t["closure_code"]})
+                return True
+        if t["state"] in DONE_STATES:
+            return False
+        if sla.get("auto_p1_at") and t["priority"] != "P1" and now >= pts(sla["auto_p1_at"]):
+            old = t["priority"]
+            t["priority"] = "P1"
+            self._set_sla(t)
+            self.log(ds_id, sc_id, "sys.gate", "SLA_ESCALATED", "ticket", t["ticket_id"], t["ticket_id"], {"priority": old},
+                     {"priority": "P1", "rule": "held-bill deadline"}, "Held bill due %s: one business day left, priority raised to P1" % sla["held_deadline"])
+            changed = True
+        for name in ("first_action", "resolve", "finance"):
+            c = sla.get(name)
+            if not c or c.get("met_at"):
+                continue
+            target = cal.elapsed(pts(c["start"]), pts(c["due"])) or 1e-9
+            pct = cal.elapsed(pts(c["start"]), now) / target
+            who = self.assignee(t)
+            if pct >= sc["warn_at"] and not c["warned"]:
+                c["warned"] = True
+                self.log(ds_id, sc_id, "sys.gate", "SLA_WARNING", "ticket", t["ticket_id"], t["ticket_id"], None,
+                         {"clock": name, "due": c["due"], "elapsed_pct": round(pct * 100), "assignee": who, "priority": t["priority"]})
+                changed = True
+            if pct >= sc["escalate_at"] and not c["escalated"]:
+                c["escalated"] = True
+                note = {"ticket_id": t["ticket_id"], "clock": name, "at": ts(now), "priority": t["priority"],
+                        "message": "%s %s SLA breached - escalated to the DRI" % (t["ticket_id"], name.replace("_", " "))}
+                if who == "DRI":
+                    note["message"] = "%s %s SLA breached while with the DRI - Billing Manager notified" % (t["ticket_id"], name.replace("_", " "))
+                    note["manager"] = True
+                st["notifications"].append(note)
+                self.log(ds_id, sc_id, "sys.gate", "SLA_ESCALATED", "ticket", t["ticket_id"], t["ticket_id"], None,
+                         {"clock": name, "due": c["due"], "escalated_to": "DRI", "assignee": who, "billing_manager_notified": who == "DRI"})
+                changed = True
+        return changed
+
+    def advance_clock(self, user_id, ds_id, sc_id, hours):
+        u = self.user(user_id)
+        hours = float(hours)
+        if not 0 < hours <= 24 * 30:
+            raise AppError("Hours must be between 0 and 720")
+        with self.lock:
+            before = ts(self.clock.now())
+            self.clock.advance(hours)
+            self.log(ds_id, sc_id, u["user_id"], "CLOCK_ADVANCED", "demo_clock", "clock", None, {"now": before},
+                     {"now": ts(self.clock.now()), "offset_hours": self.clock.offset_h}, "Demo clock advanced by %g hours (SLA only)" % hours)
+        self.tick()
+
+    # ---- ticket creation -------------------------------------------------------------------
+    def _new_ticket(self, ds_id, sc_id, sc, view, key, s, actor_id, origin, start):
         st = self.store.get(ds_id, sc_id)
-        regcats = set(self.cfg.app().get("regulatory_crm_categories", []))
-        prefix = "WF-" + (sc["run_ts"][5:7] + sc["run_ts"][8:10] if sc["run_ts"] else "BS")
-        order = sorted(seeds.items(), key=lambda kv: (kv[0][0], kv[0][1], TYPE_ORDER[kv[1]["case_type"]]))
-        created = []
-        by_key = {}
-        for n, (key, s) in enumerate(order, 1):
-            res, win = s["res"], s["win"]
-            wo = view.wos[s["root_wo_id"]]
-            acc = res["account"] or {}
-            exp = copy.deepcopy(s["expected"])
-            exp.pop("line", None)
-            ct = s["case_type"]
-            amount = exp.get("reduction") if ct == "PREVENT" else exp.get("credit") if ct == "REMEDIATE" else exp.get("unbilled_value", 0.0) if ct == "REVENUE_PROTECTION" else 0.0
-            cid = "%s-%02d" % (prefix, n)
-            reg = [c["case_id"] for c in view.crm_by_account.get(s["account_id"], []) if c["category"] in regcats and c["status"] != "CLOSED"]
-            case = OrderedDict([
-                ("case_id", cid), ("case_type", ct), ("state", "DETECTED"), ("dataset_id", ds_id), ("scenario_id", sc_id),
-                ("scenario_time", sc["scenario_time"]), ("bill_run_at", sc["run_ts"]), ("account_id", s["account_id"]),
-                ("customer_name", acc.get("customer_name", "")), ("customer_class", acc.get("customer_class", "")),
-                ("sa_id", res["sa"]["sa_id"]), ("tariff_code", res["sa"]["tariff_code"]), ("premise", res["premise"]),
-                ("meter_id", res["xw"]["mdm_meter_id"]), ("root_wo_id", wo["wo_id"]), ("root_wo_premise", wo["oms_premise_id"]),
-                ("disconnect_date", win["disconnect_date"]), ("wo_subtype", wo["wo_subtype"]),
-                ("window", {"start": win["start"], "end": win["end"]}), ("reconnect_wo_id", win["reconnect_wo_id"]),
-                ("gates", s["gates"]), ("draft_bill_id", s["draft_bill_id"]),
-                ("issued_bill_ids", s["bill_ids"] if ct == "REMEDIATE" else s.get("issued_in_window", [])),
-                ("unmatched_premise", s.get("unmatched_premise")), ("suggested_premise", res["premise"] if s.get("unmatched_premise") else None),
-                ("expected", exp), ("amount_at_stake", money(amount or 0.0)), ("linked_case_ids", []),
-                ("requires_master_data", "G5" in s["gates"]), ("requires_regulatory", bool(reg)), ("regulatory_crm_cases", reg),
-                ("integration_issue_id", None), ("investigation", None), ("investigation_error", None), ("activity", []),
-                ("decision", None), ("decisions", []), ("field_outcome", None), ("master_data", None), ("finance", None),
-                ("plan", None), ("execution", None), ("verification", None), ("release", None),
-                ("comms", {"customer_letter": None, "regulator_response": None, "approved_by": None, "approved_at": None, "edits": []}),
-                ("history", [{"state": "DETECTED", "at": now_utc(), "by": actor_id}]), ("roles_involved", []),
-                ("created_at", now_utc()), ("origin", reason)])
-            st["cases"][cid] = case
-            by_key[key] = case
-            created.append(case)
-            self.log(ds_id, sc_id, actor_id, "CASE_CREATED", "case", cid, cid, None,
-                     {"case_type": ct, "account_id": case["account_id"], "gates": case["gates"], "amount_at_stake": case["amount_at_stake"]}, reason)
-        # link PREVENT/ADVANCE <-> REMEDIATE for the same account and root-cause disconnect
-        for (acct, wo_id, ct), case in by_key.items():
-            if ct == "REMEDIATE":
-                for other_ct in ("PREVENT", "ADVANCE"):
-                    o = by_key.get((acct, wo_id, other_ct))
-                    if o:
-                        o["linked_case_ids"].append(case["case_id"])
-                        case["linked_case_ids"].append(o["case_id"])
-                        o["issued_bill_ids"] = list(case["issued_bill_ids"])
-        # integration issues, grouped by error signature (never blocking)
-        for case in created:
-            if "G4" not in case["gates"] and "G5" not in case["gates"]:
+        app = self.cfg.app()
+        res, win = s["res"], s["win"]
+        wo = view.wos[s["root_wo_id"]]
+        acc = res["account"] or {}
+        exp = copy.deepcopy(s["expected"])
+        exp.pop("line", None)
+        ttype = s["case_type"]
+        amount = exp.get("reduction", 0.0) if ttype == "PREVENT" else exp.get("credit", 0.0) if ttype == "REMEDIATE" else 0.0
+        flag = [c["case_id"] for c in view.crm_by_account.get(s["account_id"], [])
+                if c["category"] in app.get("flag_crm_categories", []) and c["status"] != "CLOSED"]
+        issued = s["bill_ids"] if ttype == "REMEDIATE" else s.get("issued_in_window", [])
+        bills_affected = len(issued) + (1 if ttype == "PREVENT" else 0)
+        prefix = "BEX-" + (sc["run_ts"][5:7] if sc["run_ts"] else "BS")
+        tid = "%s%02d" % (prefix, len(st["tickets"]) + 1)
+        t = OrderedDict([
+            ("ticket_id", tid), ("type", ttype), ("state", "NEW"), ("dataset_id", ds_id), ("scenario_id", sc_id),
+            ("scenario_time", sc["scenario_time"]), ("bill_run_at", sc["run_ts"]), ("account_id", s["account_id"]),
+            ("customer_name", acc.get("customer_name", "")), ("customer_class", acc.get("customer_class", "")),
+            ("sa_id", res["sa"]["sa_id"]), ("tariff_code", res["sa"]["tariff_code"]), ("premise", res["premise"]),
+            ("meter_id", res["xw"]["mdm_meter_id"]), ("root_wo_id", wo["wo_id"]), ("root_wo_premise", wo["oms_premise_id"]),
+            ("disconnect_date", win["disconnect_date"]), ("wo_subtype", wo["wo_subtype"]),
+            ("window", {"start": win["start"], "end": win["end"]}), ("reconnect_wo_id", win["reconnect_wo_id"]),
+            ("gates", s["gates"]), ("draft_bill_id", s["draft_bill_id"]), ("issued_bill_ids", list(issued)),
+            ("unmatched_premise", s.get("unmatched_premise")), ("suggested_premise", res["premise"] if s.get("unmatched_premise") else None),
+            ("expected", exp), ("amount", money(amount or 0.0)), ("bills_affected", bills_affected),
+            ("flag", flag), ("linked_ticket_ids", []), ("returned", False), ("deferred", False), ("closure_code", None),
+            ("impact", None), ("urgency", None), ("priority", None), ("initial_priority", None), ("doa_level", None),
+            ("match", {"status": "PENDING", "by": None, "at": None, "note": None} if s.get("unmatched_premise") else None),
+            ("triage", None), ("cancel_request", None), ("decision", None), ("decisions", []), ("finance", None), ("plan", None),
+            ("execution", None), ("verification", None), ("release", None), ("digest", None), ("register_signature", None),
+            ("investigation", None), ("investigation_error", None), ("activity", []),
+            ("comms", {"customer_letter": None, "regulator_response": None, "approved_by": None, "approved_at": None, "edits": []}),
+            ("history", [{"from": None, "to": "NEW", "transition": "CREATE", "by": actor_id, "at": ts(start), "at_utc": now_utc()}]),
+            ("sla", {"started_at": ts(start)}), ("resolved_at", None), ("created_at", ts(start)), ("origin", origin)])
+        t["impact"], t["urgency"], t["priority"] = compute_priority(t, app)
+        t["initial_priority"] = t["priority"]
+        t["doa_level"] = doa_level(t, app)
+        # deadline overrides (§9): held bill 3 business days after the run; ADVANCE 2 business days before the next run
+        cal, sc_cfg = self.cal(), self.cfg.sla()
+        if ttype == "PREVENT" and sc["run_ts"]:
+            dl = cal.add_days(start, sc_cfg["held_bill_deadline_business_days"])
+            t["sla"]["held_deadline"] = ts(dl)
+            t["sla"]["auto_p1_at"] = ts(cal.sub_days(dl, sc_cfg["held_bill_auto_p1_business_days_before"]))
+        if ttype == "ADVANCE" and sc["run_ts"]:
+            nxt = next_run_after(sc["run_ts"])
+            delta = datetime.strptime(nxt, "%Y-%m-%d %H:%M") - datetime.strptime(sc["run_ts"], "%Y-%m-%d %H:%M")
+            t["sla"]["next_run_real"] = ts(start + delta)
+            t["sla"]["next_run_scenario"] = nxt
+            t["sla"]["advance_deadline"] = ts(cal.sub_days(start + delta, sc_cfg["advance_business_days_before_next_run"]))
+        self._set_sla(t, start)
+        st["tickets"][tid] = t
+        self.log(ds_id, sc_id, actor_id, "TICKET_CREATED", "ticket", tid, tid, None,
+                 {"type": ttype, "account_id": t["account_id"], "gates": t["gates"], "amount": t["amount"], "priority": t["priority"],
+                  "impact": t["impact"], "urgency": t["urgency"], "doa_level": t["doa_level"], "bills_affected": bills_affected,
+                  "flag": flag}, origin)
+        return t
+
+    def _create_tickets(self, ds_id, sc_id, sc, view, seeds, actor_id, origin):
+        """One ticket per account and root-cause disconnect; a repeat attaches bills to the open ticket instead (§4)."""
+        st = self.store.get(ds_id, sc_id)
+        start = self.clock.now()
+        created, by_key = [], {}
+        for key, s in sorted(seeds.items(), key=lambda kv: (kv[0][0], kv[0][1], TYPE_ORDER[kv[1]["case_type"]])):
+            dup = next((t for t in st["tickets"].values() if t["account_id"] == s["account_id"] and t["root_wo_id"] == s["root_wo_id"]
+                        and t["type"] == s["case_type"] and t["state"] not in ("CLOSED", "CANCELLED")), None)
+            if dup:
+                new_bills = [b for b in (s["bill_ids"] if s["case_type"] == "REMEDIATE" else [s["draft_bill_id"]]) if b and b not in dup["issued_bill_ids"] and b != dup["draft_bill_id"]]
+                if new_bills:
+                    dup["issued_bill_ids"] += new_bills
+                    self.log(ds_id, sc_id, actor_id, "BILL_ATTACHED", "ticket", dup["ticket_id"], dup["ticket_id"], None, {"bills": new_bills}, origin)
+                by_key[key] = dup
                 continue
-            msg = view.latest_msg(case["root_wo_id"])
-            if msg and msg["status"] == "SUCCESS":
-                continue
-            sig = integration_signature(msg, view.wos[case["root_wo_id"]])
-            iss = next((i for i in st["issues"].values() if i["signature"] == sig), None)
-            if not iss:
-                iid = "INT-%02d" % (len(st["issues"]) + 1)
-                iss = {"issue_id": iid, "signature": sig, "status": "OPEN", "ticket_ref": "", "case_ids": [], "msg_ids": [], "wo_ids": [],
-                       "created_at": now_utc(), "history": []}
-                st["issues"][iid] = iss
-                self.log(ds_id, sc_id, actor_id, "INTEGRATION_ISSUE_OPENED", "integration_issue", iid, None, None, {"signature": sig})
-            for k, v in (("case_ids", case["case_id"]), ("msg_ids", msg["msg_id"] if msg else None), ("wo_ids", case["root_wo_id"])):
-                if v and v not in iss[k]:
-                    iss[k].append(v)
-            case["integration_issue_id"] = iss["issue_id"]
-            if "INTEGRATION" not in case["roles_involved"]:
-                case["roles_involved"].append("INTEGRATION")
+            t = self._new_ticket(ds_id, sc_id, sc, view, key, s, actor_id, origin, start)
+            by_key[key] = t
+            created.append(t)
+        for (acct, wo_id, tt), t in by_key.items():
+            if tt == "REMEDIATE":
+                for other in ("PREVENT", "ADVANCE"):
+                    o = by_key.get((acct, wo_id, other))
+                    if o and t["ticket_id"] not in o["linked_ticket_ids"]:
+                        o["linked_ticket_ids"].append(t["ticket_id"])
+                        t["linked_ticket_ids"].append(o["ticket_id"])
+        for t in created:
+            self._register(ds_id, sc_id, view, t, actor_id)
         return created
 
-    # ---- pre-bill gate ----------------------------------------------------------------------
+    def _register(self, ds_id, sc_id, view, t, actor_id):
+        """§10: every G4 ticket (failed / unprocessed integration message) adds to the root-cause register."""
+        if "G4" not in t["gates"]:
+            return
+        msg = view.latest_msg(t["root_wo_id"])
+        if msg and msg["status"] == "SUCCESS":
+            return
+        reg = self.store.get(ds_id, sc_id)["register"]
+        sig = integration_signature(msg, view.wos[t["root_wo_id"]])
+        e = reg.get(sig)
+        seen = (msg or {}).get("received_at", t["disconnect_date"])[:10]
+        if not e:
+            e = reg[sig] = {"signature": sig, "ticket_ids": [], "accounts": [], "wo_ids": [], "msg_ids": [], "first_seen": seen, "last_seen": seen}
+        for k, v in (("ticket_ids", t["ticket_id"]), ("accounts", t["account_id"]), ("wo_ids", t["root_wo_id"]), ("msg_ids", (msg or {}).get("msg_id"))):
+            if v and v not in e[k]:
+                e[k].append(v)
+        e["first_seen"], e["last_seen"] = min(e["first_seen"], seen), max(e["last_seen"], seen)
+        t["register_signature"] = sig
+
+    # ---- gate & back-scan ------------------------------------------------------------------
     def run_gate(self, user_id, ds_id, sc_id):
         u = self.user(user_id)
         self.require(u, "billrun", ("A",), ds_id, sc_id, "run the pre-bill gate")
@@ -2348,32 +2644,40 @@ class Engine:
             st = self.store.get(ds_id, sc_id)
             if st["gate"]:
                 raise AppError("The gate has already run for this scenario. Use Demo tools > Reset to replay it.")
-            self.log(ds_id, sc_id, user_id, "GATE_RUN_STARTED", "bill_run", sc["run_ts"], None, None, None)
+            self.log(ds_id, sc_id, user_id, "GATE_RUN_STARTED", "bill_run", sc["run_ts"])
             view = self.view(ds_id, sc_id, sandbox=False)
             res = run_gate(view)
             for s in res["seeds"].values():
                 if s["case_type"] in ("PREVENT", "ADVANCE"):
                     rem = res["seeds"].get((s["account_id"], s["root_wo_id"], "REMEDIATE"))
                     s["issued_in_window"] = rem["bill_ids"] if rem else []
-            created = self._create_cases(ds_id, sc_id, sc, view, res["seeds"], "sys.gate", "Pre-bill gate %s" % sc["run_ts"])
+            created = self._create_tickets(ds_id, sc_id, sc, view, res["seeds"], "sys.gate", "Pre-bill gate %s" % sc["run_ts"])
             for br in res["bills"]:
-                br["case_ids"] = [c["case_id"] for c in created if c["draft_bill_id"] == br["bill_id"] or
-                                  (c["case_type"] == "ADVANCE" and c["expected"].get("passed_bill_id") == br["bill_id"])]
+                br["ticket_ids"] = [t["ticket_id"] for t in created if t["draft_bill_id"] == br["bill_id"] or
+                                    (t["type"] == "ADVANCE" and t["expected"].get("passed_bill_id") == br["bill_id"])]
                 st["bills"][br["bill_id"]] = {"outcome": br["outcome"], "released": False, "release": None}
                 self.log(ds_id, sc_id, "sys.gate", "BILL_HELD" if br["outcome"] == "HELD" else "BILL_PASSED", "bill", br["bill_id"],
-                         br["case_ids"][0] if br["case_ids"] else None, None,
-                         {"outcome": br["outcome"], "rules": br["rules"], "total": br["total"]})
+                         br["ticket_ids"][0] if br["ticket_ids"] else None, None, {"outcome": br["outcome"], "rules": br["rules"], "total": br["total"]})
             counts = {k: sum(1 for b in res["bills"] if b["outcome"] == k) for k in ("PASSED", "HELD", "NON_BLOCKING")}
-            st["gate"] = {"run_ts": sc["run_ts"], "run_at": now_utc(), "run_by": user_id, "bills": res["bills"], "counts": counts,
+            st["gate"] = {"run_ts": sc["run_ts"], "run_at": ts(self.clock.now()), "run_by": user_id, "bills": res["bills"], "counts": counts,
                           "unmatched": [{"wo_id": um["wo"]["wo_id"], "premise": um["wo"]["oms_premise_id"], "candidates": um["candidates"]} for um in res["unmatched"]]}
-            self.log(ds_id, sc_id, "sys.gate", "GATE_RUN_COMPLETED", "bill_run", sc["run_ts"], None, None,
-                     dict(counts, drafts=len(res["bills"]), cases=len(created)))
+            self.log(ds_id, sc_id, "sys.gate", "GATE_RUN_COMPLETED", "bill_run", sc["run_ts"], None, None, dict(counts, drafts=len(res["bills"]), tickets=len(created)))
+            for t in created:
+                self._transition(ds_id, sc_id, t, "INVESTIGATING", "sys.gate", "TICKET_ROUTED")
             self._save(ds_id, sc_id)
-        for c in created:
-            self._spawn(self._investigate, ds_id, sc_id, c["case_id"])
+        for t in created:
+            self._spawn(self._investigate, ds_id, sc_id, t["ticket_id"])
         return st["gate"]
 
-    def send_backscan(self, user_id, ds_id, sc_id):
+    def backscan_candidates(self, ds_id, sc_id):
+        view = self.view(ds_id, sc_id, sandbox=False)
+        st = self.store.get(ds_id, sc_id)
+        out = []
+        for r in backscan_rows(view):
+            out.append({k: r[k] for k in ("wo_id", "account_id", "kind", "eligible", "reason")} | {"sent": r["wo_id"] in st["backscan_sent"]})
+        return out
+
+    def send_backscan(self, user_id, ds_id, sc_id, wo_ids=None):
         u = self.user(user_id)
         self.require(u, "backscan", ("A",), ds_id, sc_id, "send back-scan findings to the workflow")
         sc = self.scenario(ds_id, sc_id)
@@ -2381,26 +2685,33 @@ class Engine:
             raise AppError("Switch to the BACKSCAN scenario to send findings to the workflow.")
         with self.lock:
             st = self.store.get(ds_id, sc_id)
-            if st["backscan_sent"]:
-                raise AppError("Back-scan findings were already sent for this scenario.")
             view = self.view(ds_id, sc_id, sandbox=False)
-            seeds = backscan_seeds(view)
-            created = self._create_cases(ds_id, sc_id, sc, view, seeds, "sys.gate", "Back-scan finding sent by %s" % u["name"])
-            st["backscan_sent"] = True
-            self.log(ds_id, sc_id, user_id, "BACKSCAN_SENT_TO_WORKFLOW", "scenario", sc_id, None, None, {"cases": [c["case_id"] for c in created]})
+            rows = {r["wo_id"]: r for r in backscan_rows(view)}
+            wanted = wo_ids or [w for w, r in rows.items() if r["eligible"]]
+            for w in wanted:
+                r = rows.get(w)
+                if not r:
+                    raise NotFound("No back-scan row for %s" % w)
+                if not r["eligible"]:
+                    raise AppError("%s cannot be sent: %s" % (w, r["reason"]))
+            seeds = OrderedDict(((rows[w]["account_id"], w, "REMEDIATE"), rows[w]["seed"]) for w in wanted if w not in st["backscan_sent"])
+            created = self._create_tickets(ds_id, sc_id, sc, view, seeds, "sys.gate", "Back-scan finding sent by %s" % u["name"])
+            st["backscan_sent"] += [w for w in wanted if w not in st["backscan_sent"]]
+            self.log(ds_id, sc_id, user_id, "BACKSCAN_SENT_TO_WORKFLOW", "scenario", sc_id, None, None,
+                     {"work_orders": wanted, "tickets": [t["ticket_id"] for t in created]})
+            for t in created:
+                self._transition(ds_id, sc_id, t, "INVESTIGATING", "sys.gate", "TICKET_ROUTED")
             self._save(ds_id, sc_id)
-        for c in created:
-            self._spawn(self._investigate, ds_id, sc_id, c["case_id"])
-        return [c["case_id"] for c in created]
+        for t in created:
+            self._spawn(self._investigate, ds_id, sc_id, t["ticket_id"])
+        return [t["ticket_id"] for t in created]
 
     # ---- agents ------------------------------------------------------------------------------
     def execute_tool(self, ctx, runner, tc):
         name, args = tc["name"], tc.get("input") or {}
-        ok, summary = True, ""
-        st_step = None
+        ok, summary, st_step = True, "", None
         with self.lock:
-            st = ctx.state
-            case = ctx.case
+            st, t = ctx.state, ctx.case
             try:
                 if name not in runner.tools:
                     raise ToolError("tool %s is not available to %s" % (name, runner.agent_id))
@@ -2414,13 +2725,12 @@ class Engine:
                     passed, text = STEP_IMPL[st_step["step"]][1](ctx, st_step["params"])
                     out, summary, ok = {"seq": st_step["seq"], "passed": passed, "check": text}, text, passed
                     runner.guard.advance(name)
-                    ps = case["plan"]["steps"][st_step["seq"] - 1]
+                    ps = t["plan"]["steps"][st_step["seq"] - 1]
                     ps["status"], ps["check_result"] = ("DONE" if passed else "FAILED"), text
-                    self.log(ctx.ds_id, ctx.sc_id, runner.agent_id, "STEP_EXECUTED", "plan_step", "%s#%d" % (case["case_id"], st_step["seq"]),
-                             case["case_id"], None, {"step": st_step["step"], "params": st_step["params"], "result": ps.get("result"),
-                                                     "check": text, "passed": passed})
+                    self.log(ctx.ds_id, ctx.sc_id, runner.agent_id, "STEP_EXECUTED", "plan_step", "%s#%d" % (t["ticket_id"], st_step["seq"]),
+                             t["ticket_id"], None, {"step": st_step["step"], "params": st_step["params"], "result": ps.get("result"), "check": text, "passed": passed})
                 elif name in STEP_TOOLS:
-                    ps = case["plan"]["steps"][st_step["seq"] - 1]
+                    ps = t["plan"]["steps"][st_step["seq"] - 1]
                     if st["inject_failure"]:
                         st["inject_failure"] = False
                         out, summary, ok = {"ok": False, "error": "Injected failure (Demo tools)"}, "Injected failure (Demo tools)", False
@@ -2433,97 +2743,97 @@ class Engine:
                     raise ToolError("unknown tool %s" % name)
             except ToolError as e:
                 out, summary, ok = {"error": str(e)}, str(e), False
-            case["activity"].append({"n": len(case["activity"]) + 1, "agent": runner.agent_id, "tool": name,
-                                     "args": ", ".join("%s=%s" % (k, (v if not isinstance(v, (list, dict)) else (",".join(map(str, v)) if isinstance(v, list) else "{...}")))
-                                                       for k, v in args.items() if k not in ("note", "steps")),
-                                     "summary": summary, "ok": ok, "at": now_utc()})
-            self.log(ctx.ds_id, ctx.sc_id, runner.agent_id, "AGENT_TOOL_CALL", "tool", name, case["case_id"], None,
+            t["activity"].append({"n": len(t["activity"]) + 1, "agent": runner.agent_id, "tool": name,
+                                  "args": ", ".join("%s=%s" % (k, (",".join(map(str, v)) if isinstance(v, list) else "{...}" if isinstance(v, dict) else v))
+                                                    for k, v in args.items() if k not in ("note", "steps")),
+                                  "summary": summary, "ok": ok, "at": now_utc()})
+            self.log(ctx.ds_id, ctx.sc_id, runner.agent_id, "AGENT_TOOL_CALL", "tool", name, t["ticket_id"], None,
                      {"input": args if name != "submit_plan" else {"option_id": args.get("option_id"), "steps": len(args.get("steps") or [])},
                       "result": summary, "ok": ok})
-            if name in STEP_TOOLS:          # sandbox changed: persist now (read-only calls are saved with the run's result)
+            if name in STEP_TOOLS:
                 self._save(ctx.ds_id, ctx.sc_id)
         return out
 
-    def _investigate(self, ds_id, sc_id, case_id):
-        runner = AgentRunner(self, ds_id, sc_id, case_id, "agent.investigator", INVESTIGATOR_PROMPT, READ_TOOLS + DETERMINISTIC_TOOLS,
+    def _investigate(self, ds_id, sc_id, tid):
+        runner = AgentRunner(self, ds_id, sc_id, tid, "agent.investigator", INVESTIGATOR_PROMPT, READ_TOOLS + DETERMINISTIC_TOOLS,
                              self.latency_s(), max_calls=self.cfg.app().get("max_agent_tool_calls", 12))
         err, out = None, None
         try:
-            out = runner.run({"task": "investigate", "case_id": case_id}, self.llm())
+            out = runner.run({"task": "investigate", "case_id": tid}, self.llm())
             validate_investigation(self.view(ds_id, sc_id, sandbox=True), out, runner)
-        except Exception as e:      # any guardrail violation or tool failure sends the case to manual review
+        except Exception as e:
             err = "%s: %s" % (type(e).__name__, e)
             if not isinstance(e, (AgentError, ToolError)):
                 traceback.print_exc()
         with self.lock:
-            case = self._case(ds_id, sc_id, case_id)
+            t = self._ticket(ds_id, sc_id, tid)
             if err:
-                case["investigation_error"] = err
-                self.log(ds_id, sc_id, "agent.investigator", "INVESTIGATION_FAILED", "case", case_id, case_id, None, None, err)
-                self._to(ds_id, sc_id, case, "DRI_DECISION", "sys.gate", "Investigation failed guardrails; manual review")
+                t["investigation_error"] = err
+                self.log(ds_id, sc_id, "agent.investigator", "INVESTIGATION_FAILED", "ticket", tid, tid, None, None, err)
             else:
-                case["investigation"] = out
-                case["comms"]["customer_letter"] = out["drafts"].get("customer_letter")
-                case["comms"]["regulator_response"] = out["drafts"].get("regulator_response")
-                self.log(ds_id, sc_id, "agent.investigator", "INVESTIGATION_COMPLETED", "case", case_id, case_id, None,
-                         {"probable_cause": out["probable_cause"], "recommended_option": out["recommended_option"],
-                          "confidence": out["confidence"], "evidence": [e["record_id"] for e in out["evidence"]], "tool_calls": runner.calls})
-                self._to(ds_id, sc_id, case, "INVESTIGATED", "agent.investigator")
-                nxt = "MASTER_DATA_REVIEW" if case["requires_master_data"] else "DRI_DECISION"
-                self._to(ds_id, sc_id, case, nxt, "sys.gate", "G5 near match needs steward confirmation" if nxt == "MASTER_DATA_REVIEW" else None)
+                t["investigation"] = out
+                t["comms"]["customer_letter"] = out["drafts"].get("customer_letter")
+                t["comms"]["regulator_response"] = out["drafts"].get("regulator_response")
+                self.log(ds_id, sc_id, "agent.investigator", "INVESTIGATION_COMPLETED", "ticket", tid, tid, None,
+                         {"probable_cause": out["probable_cause"], "recommended_option": out["recommended_option"], "confidence": out["confidence"],
+                          "evidence": [e["record_id"] for e in out["evidence"]], "tool_calls": runner.calls})
+            self._transition(ds_id, sc_id, t, "TRIAGE", "agent.investigator", "TICKET_ROUTED",
+                             "Evidence ready" if not err else "Investigation failed guardrails; manual triage")
             self._save(ds_id, sc_id)
 
     def _submit_plan(self, ctx, a):
-        case = ctx.case
-        v = ctx.view
-        dec = case.get("decision") or {}
-        pb = self.cfg.playbooks()[self.playbook_id(case)]
+        t, v = ctx.case, ctx.view
+        dec = t.get("decision") or {}
+        pb = self.cfg.playbooks()[self.playbook_id(t)]
         opt = next((o for o in pb["options"] if o["option_id"] == a.get("option_id")), None)
         errors = []
-        if case["state"] != "PLAN_APPROVAL":
-            errors.append("case is not awaiting plan approval")
+        if t["state"] != "PLAN_APPROVAL":
+            errors.append("ticket is not awaiting plan approval")
         if not opt or opt["option_id"] != dec.get("option_id"):
-            errors.append("plan option does not match the DRI decision")
+            errors.append("plan option does not match the decision")
         steps = a.get("steps") or []
         for i, s in enumerate(steps, 1):
-            p = s.get("params") or {}
+            p, stp = s.get("params") or {}, s.get("step")
             if s.get("seq") != i:
                 errors.append("step %d has seq %r" % (i, s.get("seq")))
-            if not opt or s.get("step") not in opt["steps"]:
-                errors.append("step %s is not in the approved playbook" % s.get("step"))
+            if not opt or stp not in opt["steps"]:
+                errors.append("step %s is not in the approved playbook" % stp)
                 continue
-            st = s["step"]
-            if st == "STOP_SA" and (p.get("sa_id") != case["sa_id"] or p.get("effective_date") != case["disconnect_date"]):
-                errors.append("STOP_SA parameters do not match the case")
-            if st in ("REGENERATE_DRAFT_BILL", "CANCEL_DRAFT_BILL") and p.get("bill_id") != case["draft_bill_id"]:
-                errors.append("%s must target the held draft" % st)
-            if st == "CORRECT_MDM_READS" and (p.get("meter_id") != case["meter_id"] or p.get("from") != case["window"]["start"]):
-                errors.append("CORRECT_MDM_READS must target the case meter from the day after the disconnect")
-            if st == "REPROCESS_INTEGRATION_MESSAGE" and (v.latest_msg(case["root_wo_id"]) or {}).get("msg_id") != p.get("msg_id"):
+            if stp == "STOP_SA" and (p.get("sa_id") != t["sa_id"] or p.get("effective_date") != t["disconnect_date"]):
+                errors.append("STOP_SA parameters do not match the ticket")
+            if stp in ("REGENERATE_DRAFT_BILL", "CANCEL_DRAFT_BILL") and p.get("bill_id") != t["draft_bill_id"]:
+                errors.append("%s must target the held draft" % stp)
+            if stp == "CORRECT_MDM_READS" and (p.get("meter_id") != t["meter_id"] or p.get("from") != t["window"]["start"]):
+                errors.append("CORRECT_MDM_READS must target the ticket meter from the day after the disconnect")
+            if stp == "REPROCESS_INTEGRATION_MESSAGE" and (v.latest_msg(t["root_wo_id"]) or {}).get("msg_id") != p.get("msg_id"):
                 errors.append("REPROCESS must target the disconnect's integration message")
-            if st == "CLOSE_TODO" and p.get("todo_id") not in [t["todo_id"] for t in v.todos_for(case["root_wo_id"], case["sa_id"])]:
-                errors.append("CLOSE_TODO must target a To Do of this case")
-            if st in ("ADD_CRM_NOTE", "CREATE_CREDIT_MEMO") and p.get("account_id") != case["account_id"]:
-                errors.append("%s must target the case account" % st)
-            if st == "CORRECT_PREMISE_REFERENCE" and (p.get("wo_id") != case["root_wo_id"] or p.get("to_premise") != case["suggested_premise"]):
-                errors.append("CORRECT_PREMISE_REFERENCE must apply the steward-confirmed match")
-            if st == "CREATE_CREDIT_MEMO":
-                exp = case["expected"]
-                if abs(num(p.get("amount")) - exp.get("credit", -1)) > 0.01 + 1e-9:
+            if stp == "CLOSE_TODO" and p.get("todo_id") not in [x["todo_id"] for x in v.todos_for(t["root_wo_id"], t["sa_id"])]:
+                errors.append("CLOSE_TODO must target a To Do of this ticket")
+            if stp in ("ADD_CRM_NOTE", "CREATE_CREDIT_MEMO") and p.get("account_id") != t["account_id"]:
+                errors.append("%s must target the ticket account" % stp)
+            if stp == "CORRECT_PREMISE_REFERENCE" and (p.get("wo_id") != t["root_wo_id"] or p.get("to_premise") != t["suggested_premise"]
+                                                        or (t.get("match") or {}).get("status") != "CONFIRMED"):
+                errors.append("CORRECT_PREMISE_REFERENCE needs the Analyst-confirmed match")
+            if stp in ("DRAFT_CUSTOMER_LETTER", "DRAFT_REGULATOR_RESPONSE") and p.get("ticket_id") != t["ticket_id"]:
+                errors.append("%s must target this ticket" % stp)
+            if stp == "DRAFT_REGULATOR_RESPONSE" and not t["flag"]:
+                errors.append("a regulator response is only drafted when a dispute / regulatory flag applies")
+            if stp == "CREATE_CREDIT_MEMO":
+                if abs(num(p.get("amount")) - t["expected"].get("credit", -1)) > 0.01 + 1e-9:
                     errors.append("credit memo amount differs from the calculator")
                 if v.periods.get(p.get("gl_period"), {}).get("status") != "OPEN":
                     errors.append("credit memo must post to an OPEN GL period")
         if errors:
             return {"accepted": False, "error": "; ".join(errors)}, "plan rejected: " + "; ".join(errors)
-        case["plan"] = {"option_id": opt["option_id"], "label": opt["label"], "proposed_at": now_utc(), "approved_by": None,
-                        "steps": [dict(s, status="PENDING", result=None, check_result=None) for s in steps]}
+        t["plan"] = {"option_id": opt["option_id"], "label": opt["label"], "proposed_at": now_utc(), "approved_by": None,
+                     "steps": [dict(s, status="PENDING", result=None, check_result=None) for s in steps]}
         return {"accepted": True, "steps": steps}, "plan accepted: %d step(s) %s" % (len(steps), ", ".join(s["step"] for s in steps))
 
-    def _propose_plan(self, ds_id, sc_id, case_id):
+    def _propose_plan(self, ds_id, sc_id, tid):
         with self.lock:
-            case = self._case(ds_id, sc_id, case_id)
-            task = {"phase": "plan", "case_id": case_id, "option_id": case["decision"]["option_id"], "playbook_id": self.playbook_id(case)}
-        runner = AgentRunner(self, ds_id, sc_id, case_id, "agent.executor", EXECUTOR_PROMPT, ("get_case", "calculate_correction", "submit_plan"),
+            t = self._ticket(ds_id, sc_id, tid)
+            task = {"phase": "plan", "case_id": tid, "option_id": t["decision"]["option_id"], "playbook_id": self.playbook_id(t)}
+        runner = AgentRunner(self, ds_id, sc_id, tid, "agent.executor", EXECUTOR_PROMPT, ("get_case", "calculate_correction", "submit_plan"),
                              self.latency_s(), max_calls=self.cfg.app().get("max_agent_tool_calls", 12))
         try:
             out = runner.run(task, self.llm())
@@ -2531,422 +2841,570 @@ class Engine:
         except (AgentError, ToolError) as e:
             err = str(e)
         with self.lock:
-            case = self._case(ds_id, sc_id, case_id)
+            t = self._ticket(ds_id, sc_id, tid)
             if err:
-                self.log(ds_id, sc_id, "agent.executor", "STEP_FAILED", "plan", case_id, case_id, None, None, "Plan could not be built: " + err)
-                self._to(ds_id, sc_id, case, "RETURNED_TO_DRI", "agent.executor", "Plan rejected by server validation: " + err)
+                self.log(ds_id, sc_id, "agent.executor", "STEP_FAILED", "plan", tid, tid, None, None, "Plan could not be built: " + err)
+                self._transition(ds_id, sc_id, t, "AWAITING_DECISION", "agent.executor", "TICKET_ROUTED", "Plan rejected by validation: " + err, {"returned": True})
             else:
-                self.log(ds_id, sc_id, "agent.executor", "PLAN_PROPOSED", "plan", case_id, case_id, None,
-                         {"option_id": case["plan"]["option_id"], "steps": [{"seq": s["seq"], "step": s["step"], "params": s["params"]} for s in case["plan"]["steps"]]})
+                self.log(ds_id, sc_id, "agent.executor", "PLAN_PROPOSED", "plan", tid, tid, None,
+                         {"option_id": t["plan"]["option_id"], "steps": [{"seq": s["seq"], "step": s["step"], "params": s["params"]} for s in t["plan"]["steps"]]})
             self._save(ds_id, sc_id)
 
-    def _execute(self, ds_id, sc_id, case_id):
+    def _execute(self, ds_id, sc_id, tid):
         with self.lock:
-            case = self._case(ds_id, sc_id, case_id)
-            plan = [{"seq": s["seq"], "step": s["step"], "params": s["params"]} for s in case["plan"]["steps"]]
-        runner = AgentRunner(self, ds_id, sc_id, case_id, "agent.executor", EXECUTOR_PROMPT, STEP_TOOLS + ("check_step",),
+            t = self._ticket(ds_id, sc_id, tid)
+            plan = [{"seq": s["seq"], "step": s["step"], "params": s["params"]} for s in t["plan"]["steps"]]
+        runner = AgentRunner(self, ds_id, sc_id, tid, "agent.executor", EXECUTOR_PROMPT, STEP_TOOLS + ("check_step",),
                              self.latency_s(), guard=ExecGuard(plan), max_calls=self.cfg.app().get("max_agent_tool_calls", 12))
         try:
-            out = runner.run({"phase": "execute", "case_id": case_id, "plan": plan}, self.llm())
+            out = runner.run({"phase": "execute", "case_id": tid, "plan": plan}, self.llm())
         except (AgentError, ToolError) as e:
             out = {"status": "STEP_FAILED", "explanation": "Execution stopped: %s." % e}
         with self.lock:
-            case = self._case(ds_id, sc_id, case_id)
-            case["execution"] = out
+            t = self._ticket(ds_id, sc_id, tid)
+            t["execution"] = out
             if out.get("status") != "COMPLETED":
-                self.log(ds_id, sc_id, "agent.executor", "STEP_FAILED", "plan_step", "%s#%s" % (case_id, out.get("seq", "?")), case_id,
+                self.log(ds_id, sc_id, "agent.executor", "STEP_FAILED", "plan_step", "%s#%s" % (tid, out.get("seq", "?")), tid,
                          None, {"step": out.get("step")}, out.get("explanation"))
-                self._to(ds_id, sc_id, case, "RETURNED_TO_DRI", "agent.executor", out.get("explanation"))
+                self._transition(ds_id, sc_id, t, "AWAITING_DECISION", "agent.executor", "TICKET_ROUTED", out.get("explanation"), {"returned": True})
                 self._save(ds_id, sc_id)
                 return
-            self._to(ds_id, sc_id, case, "VERIFYING", "agent.executor")
-            self._verify(ds_id, sc_id, case)
+            self._transition(ds_id, sc_id, t, "VERIFYING", "agent.executor", "TICKET_ROUTED")
+            self._verify(ds_id, sc_id, t)
             self._save(ds_id, sc_id)
 
-    def _verify(self, ds_id, sc_id, case):
-        """sys.verifier re-runs the gate on the corrected draft (or checks the account / memo / field order)."""
+    def _verify(self, ds_id, sc_id, t):
+        """sys.verifier re-runs the gate on the sandboxed result (or checks the account / credit memo)."""
         v = self.view(ds_id, sc_id, sandbox=True)
-        ct = case["case_type"]
-        ok, detail = False, ""
-        if ct == "PREVENT":
-            b = v.bills.get(case["draft_bill_id"], {})
+        tt = t["type"]
+        if tt == "PREVENT":
+            b = v.bills.get(t["draft_bill_id"], {})
             if b.get("bill_status") == "CANCELLED":
-                sa = v.sas.get(case["sa_id"], {})
+                sa = v.sas.get(t["sa_id"], {})
                 ok = sa.get("sa_status") == "STOPPED"
                 detail = "Draft %s cancelled; SA %s %s" % (b["bill_id"], sa.get("sa_id"), sa.get("sa_status"))
             else:
                 ev = evaluate_bill(v, b, unmatched_disconnects(v))
                 ok = ev["outcome"] == "PASSED"
-                detail = "Gate re-run on %s (%s, %s): %s %s" % (b.get("bill_id"), b.get("bill_status"), fmt_money(num(b.get("total_amount"))),
-                                                                ev["outcome"], ",".join(ev["rules"]))
-        elif ct == "ADVANCE":
-            b = v.bills.get(case["expected"].get("passed_bill_id"), {})
+                detail = "Gate re-run on %s (%s, %s): %s %s" % (b.get("bill_id"), b.get("bill_status"), fmt_money(num(b.get("total_amount"))), ev["outcome"], ",".join(ev["rules"]))
+        elif tt == "ADVANCE":
+            b = v.bills.get(t["expected"].get("passed_bill_id"), {})
             ev = evaluate_bill(v, b, unmatched_disconnects(v))
             ok = ev["outcome"] == "PASSED"
-            detail = "Gate re-run on %s: %s %s (SA %s)" % (b.get("bill_id"), ev["outcome"], ",".join(ev["rules"]), v.sas.get(case["sa_id"], {}).get("sa_status"))
-        elif ct == "REMEDIATE":
-            m = v.memos.get("CM-" + case["case_id"], {})
-            ok = bool(m) and abs(num(m.get("amount")) - case["expected"]["credit"]) <= 0.01 + 1e-9 and v.periods.get(m.get("gl_period"), {}).get("status") == "OPEN"
-            detail = "Credit memo %s %s in %s" % (m.get("memo_id"), fmt_money(num(m.get("amount"))), m.get("gl_period"))
+            detail = "Gate re-run on %s: %s %s (SA %s)" % (b.get("bill_id"), ev["outcome"], ",".join(ev["rules"]), v.sas.get(t["sa_id"], {}).get("sa_status"))
         else:
-            fw = v.wos.get("WO-SBX-" + case["case_id"])
-            note = any(r["case_id"] == "CASE-SBX-" + case["case_id"] for r in v.t[F_CRM])
-            ok = note and (fw is not None or case["decision"]["option_id"] != "DISPATCH_FIELD_CHECK")
-            detail = "Field work order %s; CRM note %s" % ("WO-SBX-" + case["case_id"] if fw else "none", "present" if note else "missing")
-        case["verification"] = {"passed": ok, "detail": detail, "at": now_utc()}
-        self.log(ds_id, sc_id, "sys.verifier", "VERIFICATION_PASSED" if ok else "VERIFICATION_FAILED", "case", case["case_id"], case["case_id"], None, {"detail": detail})
+            m = v.memos.get("CM-" + t["ticket_id"], {})
+            letter = v.letters.get("LTR-%s-CUSTOMER" % t["ticket_id"])
+            ok = bool(m) and abs(num(m.get("amount")) - t["expected"]["credit"]) <= 0.01 + 1e-9 and v.periods.get(m.get("gl_period"), {}).get("status") == "OPEN" and bool(letter)
+            detail = "Credit memo %s %s in %s; customer letter %s" % (m.get("memo_id"), fmt_money(num(m.get("amount"))), m.get("gl_period"), "drafted" if letter else "missing")
+        t["verification"] = {"passed": ok, "detail": detail, "at": now_utc()}
+        self.log(ds_id, sc_id, "sys.verifier", "VERIFICATION_PASSED" if ok else "VERIFICATION_FAILED", "ticket", t["ticket_id"], t["ticket_id"], None, {"detail": detail})
         if not ok:
-            self._to(ds_id, sc_id, case, "RETURNED_TO_DRI", "sys.verifier", "Verification failed: " + detail)
-        elif case["requires_regulatory"]:
-            self._to(ds_id, sc_id, case, "REGULATORY_REVIEW", "sys.verifier", "Open dispute / regulatory complaint: " + ", ".join(case["regulatory_crm_cases"]))
-        elif ct == "PREVENT":
-            self._to(ds_id, sc_id, case, "READY_TO_RELEASE", "sys.verifier")
+            self._transition(ds_id, sc_id, t, "AWAITING_DECISION", "sys.verifier", "TICKET_ROUTED", "Verification failed: " + detail, {"returned": True})
+        elif t["flag"]:
+            self._transition(ds_id, sc_id, t, "COMMS_APPROVAL", "sys.verifier", "TICKET_ROUTED", "Dispute / regulatory flag: " + ", ".join(t["flag"]))
+        elif tt == "PREVENT":
+            self._transition(ds_id, sc_id, t, "READY_TO_RELEASE", "sys.verifier", "TICKET_ROUTED")
         else:
-            self._to(ds_id, sc_id, case, "RESOLVED", "sys.verifier")
+            t["closure_code"] = "RESOLVED_ACCOUNT_FIXED" if tt == "ADVANCE" else "RESOLVED_CREDIT_POSTED"
+            self._transition(ds_id, sc_id, t, "RESOLVED", "sys.verifier", "TICKET_ROUTED", None, {"closure_code": t["closure_code"]})
 
-    # ---- human actions -------------------------------------------------------------------
-    def allowed_actions(self, u, case):
+    # ---- human actions (server-enforced persona, state, DoA and SoD) ---------------------------
+    def allowed_actions(self, u, t):
         out = []
-        for a, (roles, states) in ACTIONS.items():
-            if u["role"] in roles and case["state"] in states:
-                if a == "APPROVE_PLAN" and not case.get("plan"):
+        p = u["persona"]
+        for a, personas in ACTION_PERSONAS.items():
+            if p not in personas:
+                continue
+            states = ACTION_STATES[a]
+            if states and t["state"] not in states:
+                continue
+            if a in ("CONFIRM_MATCH", "REJECT_MATCH") and not (t.get("match") and t["match"]["status"] == "PENDING"):
+                continue
+            if a == "CONFIRM_TRIAGE" and t.get("match") and t["match"]["status"] == "PENDING":
+                continue
+            if a in ("APPROVE_CANCELLATION", "DECLINE_CANCELLATION") and not t.get("cancel_request"):
+                continue
+            if a == "REQUEST_CANCELLATION" and t.get("cancel_request"):
+                continue
+            if a == "DECIDE":
+                analyst_l0 = t.get("doa_level") == "L0" and not t.get("returned")
+                if analyst_l0 and p == "DRI":
+                    continue                   # L0: the Analyst decides alone (the DRI reviews in the digest)
+                if not analyst_l0 and p == "BILLING_OPS":
                     continue
-                out.append(a)
+            if a in ("APPROVE_PLAN", "RETURN_PLAN") and (not t.get("plan") or (t.get("decision") or {}).get("by") != u["user_id"]):
+                continue
+            if a == "L0_REVIEW" and not (t.get("doa_level") == "L0" and t.get("decision") and t["decision"].get("level") == "L0" and not t.get("digest")):
+                continue
+            if a == "REOPEN" and not self._within_reopen(t):
+                continue
+            out.append(a)
         return out
 
-    def act(self, user_id, ds_id, sc_id, case_id, action, p):
+    def _within_reopen(self, t):
+        return bool(t.get("resolved_at")) and self.clock.now() < self.cal().add_days(pts(t["resolved_at"]), self.cfg.sla()["reopen_window_business_days"])
+
+    def act(self, user_id, ds_id, sc_id, tid, action, p):
         u = self.user(user_id)
         spawn = None
         with self.lock:
-            case = self._case(ds_id, sc_id, case_id)
-            spec = ACTIONS.get(action)
-            if not spec:
+            t = self._ticket(ds_id, sc_id, tid)
+            if action not in ACTION_PERSONAS:
                 raise AppError("Unknown action %s" % action)
-            roles, states = spec
-            if u["role"] not in roles:
-                self.log(ds_id, sc_id, user_id, "PERMISSION_DENIED", "case", case_id, case_id, None, {"action": action},
-                         "%s (%s) may not %s" % (u["name"], u["role"], action))
-                raise PermissionDenied("%s may not perform %s" % (u["role"], action))
-            if case["state"] not in states:
-                raise AppError("%s is not allowed while the case is %s" % (action, case["state"]))
+            if u["persona"] not in ACTION_PERSONAS[action]:
+                self.deny(u, ds_id, sc_id, "perform %s" % action, tid)
+            if ACTION_STATES[action] and t["state"] not in ACTION_STATES[action]:
+                raise AppError("%s is not allowed while the ticket is %s" % (action, t["state"]))
             reason = (p.get("reason") or "").strip()
-            if action in REASON_REQUIRED and not reason:
-                raise AppError("A written reason is required.")
-            ds, sc = ds_id, sc_id
-            if action == "CONFIRM_MATCH":
-                case["master_data"] = {"outcome": "CONFIRMED", "by": user_id, "at": now_utc(), "note": reason,
-                                       "unmatched_premise": case["unmatched_premise"], "suggested_premise": case["suggested_premise"]}
-                self.log(ds, sc, user_id, "MATCH_CONFIRMED", "premise", case["unmatched_premise"], case_id, {"premise": case["unmatched_premise"]},
-                         {"premise": case["suggested_premise"]}, reason or None)
-                self._to(ds, sc, case, "DRI_DECISION", user_id)
-            elif action == "REJECT_MATCH":
-                case["master_data"] = {"outcome": "REJECTED", "by": user_id, "at": now_utc(), "note": reason}
-                self.log(ds, sc, user_id, "MATCH_REJECTED", "premise", case["unmatched_premise"], case_id, None, None, reason)
-                self._to(ds, sc, case, "CLOSED_NO_ACTION", user_id, "Closed to MASTER_DATA (match rejected): " + reason)
+            if action in REASON_ACTIONS and not reason:
+                raise AppError("A written reason is required (SoD-5).")
+            ds, sc, uid = ds_id, sc_id, u["user_id"]
+            now = ts(self.clock.now())
+            if action in ("CONFIRM_MATCH", "REJECT_MATCH"):
+                if not t.get("match") or t["match"]["status"] != "PENDING":
+                    raise AppError("No pending ID match on this ticket")
+                note = (p.get("note") or reason).strip()
+                if not note:
+                    raise AppError("An evidence note is required for the ID-match decision.")
+                ok = action == "CONFIRM_MATCH"
+                t["match"].update(status="CONFIRMED" if ok else "REJECTED", by=uid, at=now, note=note)
+                self._first_action(t)
+                self.log(ds, sc, uid, "MATCH_CONFIRMED" if ok else "MATCH_REJECTED", "premise", t["unmatched_premise"], tid,
+                         {"premise": t["unmatched_premise"]}, {"premise": t["suggested_premise"], "status": t["match"]["status"]}, note)
+            elif action == "CHANGE_PRIORITY":
+                d = p.get("direction")
+                i = PRIORITIES.index(t["priority"]) + (-1 if d == "up" else 1 if d == "down" else 0)
+                if i < 0 or i > 3 or d not in ("up", "down"):
+                    raise AppError("Priority can move one level up or down within P1-P4.")
+                if abs(i - PRIORITIES.index(t["initial_priority"])) > 1:
+                    raise AppError("The Analyst can change priority by one level only.")
+                old = t["priority"]
+                t["priority"] = PRIORITIES[i]
+                self._set_sla(t)
+                self._first_action(t)
+                self.log(ds, sc, uid, "PRIORITY_CHANGED", "ticket", tid, tid, {"priority": old}, {"priority": t["priority"]}, reason)
+            elif action == "CONFIRM_TRIAGE":
+                if t.get("match") and t["match"]["status"] == "PENDING":
+                    raise AppError("Confirm or reject the ID match before the ticket can leave TRIAGE.")
+                inv = t.get("investigation") or {}
+                proposed = p.get("proposed_option") or inv.get("recommended_option")
+                if t.get("match") and t["match"]["status"] == "REJECTED":
+                    proposed = "RELEASE_AS_IS"
+                t["triage"] = {"by": uid, "at": now, "proposed_option": proposed, "note": reason or None}
+                self._transition(ds, sc, t, "AWAITING_DECISION", uid, "TRIAGE_CONFIRMED", reason or None, {"proposed_option": proposed})
+                if p.get("decide") and t["doa_level"] == "L0" and proposed == inv.get("recommended_option"):
+                    spawn = self._decide(u, ds, sc, t, proposed, reason)
+            elif action == "REQUEST_CANCELLATION":
+                t["cancel_request"] = {"by": uid, "at": now, "reason": reason}
+                self._first_action(t)
+                self.log(ds, sc, uid, "CANCELLATION_REQUESTED", "ticket", tid, tid, None, {"closure_code": "CANCELLED_FALSE_POSITIVE"}, reason)
+            elif action == "APPROVE_CANCELLATION":
+                if not t.get("cancel_request"):
+                    raise AppError("No cancellation request to approve")
+                if t["cancel_request"]["by"] == uid:
+                    self.deny(u, ds, sc, "approve their own cancellation request (SoD-2)", tid)
+                t["closure_code"] = "CANCELLED_FALSE_POSITIVE"
+                self._transition(ds, sc, t, "CANCELLED", uid, "TICKET_CANCELLED", reason, {"closure_code": t["closure_code"]})
+            elif action == "DECLINE_CANCELLATION":
+                self.log(ds, sc, uid, "CANCELLATION_DECLINED", "ticket", tid, tid, {"cancel_request": t["cancel_request"]}, None, reason or None)
+                t["cancel_request"] = None
+            elif action == "CANCEL_DUPLICATE":
+                t["closure_code"] = "CANCELLED_DUPLICATE"
+                self._transition(ds, sc, t, "CANCELLED", uid, "TICKET_CANCELLED", reason, {"closure_code": t["closure_code"], "duplicate_of": p.get("duplicate_of")})
             elif action == "DECIDE":
-                spawn = self._decide(u, ds, sc, case, p.get("option_id"), reason)
-            elif action == "CLOSE_NO_ACTION":
-                self._to(ds, sc, case, "CLOSED_NO_ACTION", user_id, reason)
-            elif action == "FIELD_OUTCOME":
-                oc = p.get("outcome")
-                if oc not in FIELD_OUTCOMES:
-                    raise AppError("Outcome must be one of %s" % ", ".join(FIELD_OUTCOMES))
-                case["field_outcome"] = {"outcome": oc, "note": reason, "by": user_id, "at": now_utc()}
-                self.log(ds, sc, user_id, "FIELD_OUTCOME_RECORDED", "case", case_id, case_id, None, {"outcome": oc}, reason or None)
-                self._to(ds, sc, case, "DRI_DECISION", user_id)
+                spawn = self._decide(u, ds, sc, t, p.get("option_id"), reason)
             elif action == "FINANCE_APPROVE":
-                case["finance"] = {"outcome": "APPROVED", "by": user_id, "at": now_utc(), "amount": case["amount_at_stake"], "note": reason}
-                self.log(ds, sc, user_id, "FINANCE_APPROVED", "case", case_id, case_id, None,
-                         {"amount": case["amount_at_stake"], "gl_period": case["expected"].get("gl_period")}, reason or None)
-                self._to(ds, sc, case, "PLAN_APPROVAL", user_id)
-                spawn = (self._propose_plan, ds, sc, case_id)
+                if t["type"] == "REMEDIATE":
+                    per = self.view(ds, sc, sandbox=False).periods.get(t["expected"].get("gl_period"), {})
+                    if per.get("status") != "OPEN":
+                        raise AppError("Credits must post to an OPEN GL period (%s is %s)." % (t["expected"].get("gl_period"), per.get("status")))
+                t["finance"] = {"outcome": "APPROVED", "by": uid, "at": now, "amount": t["amount"], "note": reason or None}
+                as_is = (t.get("decision") or {}).get("terminal") == "RELEASE_AS_IS"
+                if as_is:
+                    t["release"] = {"mode": "AS_IS", "reason": t["decision"].get("reason")}
+                self._transition(ds, sc, t, "READY_TO_RELEASE" if as_is else "PLAN_APPROVAL", uid, "FINANCE_APPROVED", reason or None,
+                                 {"amount": t["amount"], "gl_period": t["expected"].get("gl_period")})
+                if not as_is:
+                    spawn = (self._propose_plan, ds, sc, tid)
             elif action == "FINANCE_REJECT":
-                case["finance"] = {"outcome": "REJECTED", "by": user_id, "at": now_utc(), "note": reason}
-                self.log(ds, sc, user_id, "FINANCE_REJECTED", "case", case_id, case_id, None, None, reason)
-                self._to(ds, sc, case, "RETURNED_TO_DRI", user_id, "Finance rejected: " + reason)
-            elif action == "APPROVE_PLAN":
-                if not case.get("plan"):
+                t["finance"] = {"outcome": "REJECTED", "by": uid, "at": now, "note": reason}
+                self._transition(ds, sc, t, "AWAITING_DECISION", uid, "FINANCE_REJECTED", reason, {"returned": True})
+            elif action in ("APPROVE_PLAN", "RETURN_PLAN"):
+                if (t.get("decision") or {}).get("by") != uid:
+                    self.deny(u, ds, sc, "approve a plan for a decision they did not make (SoD: approver = decision-maker)", tid)
+                if not t.get("plan"):
                     raise AppError("No plan has been proposed yet.")
-                case["plan"]["approved_by"], case["plan"]["approved_at"] = user_id, now_utc()
-                self.log(ds, sc, user_id, "PLAN_APPROVED", "plan", case_id, case_id, None,
-                         {"option_id": case["plan"]["option_id"], "steps": [s["step"] for s in case["plan"]["steps"]]}, reason or None)
-                if not case["requires_regulatory"] and case["comms"]["customer_letter"]:
-                    case["comms"]["approved_by"], case["comms"]["approved_at"] = user_id, now_utc()
-                    self.log(ds, sc, user_id, "COMMS_APPROVED", "customer_letter", case_id, case_id, None, {"approved_by_role": "DRI"})
-                self._to(ds, sc, case, "EXECUTING", user_id)
-                spawn = (self._execute, ds, sc, case_id)
-            elif action == "REJECT_PLAN":
-                self._to(ds, sc, case, "RETURNED_TO_DRI", user_id, "Plan rejected: " + reason)
+                if action == "RETURN_PLAN":
+                    self._transition(ds, sc, t, "AWAITING_DECISION", uid, "PLAN_RETURNED", reason, {"returned": True})
+                else:
+                    t["plan"]["approved_by"], t["plan"]["approved_at"] = uid, now
+                    self._transition(ds, sc, t, "IN_PROGRESS", uid, "PLAN_APPROVED", reason or None,
+                                     {"option_id": t["plan"]["option_id"], "steps": [s["step"] for s in t["plan"]["steps"]]})
+                    spawn = (self._execute, ds, sc, tid)
             elif action == "EDIT_COMMS":
-                for field in ("customer_letter", "regulator_response"):
-                    if field in p and p[field] is not None and p[field] != case["comms"].get(field):
-                        before = case["comms"].get(field)
-                        case["comms"][field] = p[field]
-                        case["comms"]["edits"].append({"field": field, "by": user_id, "at": now_utc()})
-                        self.log(ds, sc, user_id, "COMMS_EDITED", field, case_id, case_id, {"text": before}, {"text": p[field]}, reason or None)
+                self._edit_comms(u, ds, sc, t, p, reason)
             elif action == "APPROVE_COMMS":
-                case["comms"]["approved_by"], case["comms"]["approved_at"] = user_id, now_utc()
-                self.log(ds, sc, user_id, "COMMS_APPROVED", "customer_letter", case_id, case_id, None, {"approved_by_role": "REGULATORY"}, reason or None)
-                self._to(ds, sc, case, "READY_TO_RELEASE" if case["case_type"] == "PREVENT" else "RESOLVED", user_id)
-            elif action == "REJECT_COMMS":
-                self._to(ds, sc, case, "RETURNED_TO_DRI", user_id, "Regulatory rejected: " + reason)
+                self._edit_comms(u, ds, sc, t, p, reason)
+                t["comms"]["approved_by"], t["comms"]["approved_at"] = uid, now
+                if t["type"] == "PREVENT":
+                    self._transition(ds, sc, t, "READY_TO_RELEASE", uid, "COMMS_APPROVED", reason or None)
+                else:
+                    t["closure_code"] = "RESOLVED_ACCOUNT_FIXED" if t["type"] == "ADVANCE" else "RESOLVED_CREDIT_POSTED"
+                    self._transition(ds, sc, t, "RESOLVED", uid, "COMMS_APPROVED", reason or None, {"closure_code": t["closure_code"]})
+            elif action == "RELEASE":
+                self._release_ticket(u, ds, sc, t)
+            elif action == "REOPEN":
+                if not self._within_reopen(t):
+                    raise AppError("Tickets can be reopened only within 5 business days of resolution.")
+                self._transition(ds, sc, t, "AWAITING_DECISION", uid, "TICKET_REOPENED", reason, {"returned": True})
+            elif action == "L0_REVIEW":
+                if not (t.get("decision") or {}).get("level") == "L0":
+                    raise AppError("Only L0 decisions appear in the DRI digest.")
+                if t.get("digest"):
+                    raise AppError("Already reviewed.")
+                t["digest"] = {"by": uid, "at": now, "comment": (p.get("comment") or "").strip() or None}
+                self.log(ds, sc, uid, "L0_REVIEWED", "ticket", tid, tid, None,
+                         {"outcome": t["state"], "amount": t["amount"], "verifier": (t.get("verification") or {}).get("passed")}, t["digest"]["comment"])
             self._save(ds, sc)
         if spawn:
             self._spawn(*spawn)
-        return self._case(ds_id, sc_id, case_id)
+        return self._ticket(ds_id, sc_id, tid)
 
-    def _decide(self, u, ds, sc, case, option_id, reason):
-        pb = self.cfg.playbooks()[self.playbook_id(case)]
+    def _first_action(self, t):
+        if not t["sla"]["first_action"].get("met_at"):
+            t["sla"]["first_action"]["met_at"] = ts(self.clock.now())
+
+    def _edit_comms(self, u, ds, sc, t, p, reason):
+        for field in ("customer_letter", "regulator_response"):
+            if field in p and p[field] is not None and p[field] != t["comms"].get(field):
+                before = t["comms"].get(field)
+                t["comms"][field] = p[field]
+                t["comms"]["edits"].append({"field": field, "by": u["user_id"], "at": ts(self.clock.now())})
+                self.log(ds, sc, u["user_id"], "COMMS_EDITED", field, t["ticket_id"], t["ticket_id"], {"text": before}, {"text": p[field]}, reason or None)
+
+    def _decide(self, u, ds, sc, t, option_id, reason):
+        pb = self.cfg.playbooks()[self.playbook_id(t)]
         opt = next((o for o in pb["options"] if o["option_id"] == option_id), None)
         if not opt:
-            raise AppError("Option %s is not in playbook %s" % (option_id, self.playbook_id(case)))
-        if opt.get("requires_reason") and not reason:
-            raise AppError("A written reason is required for %s." % opt["label"])
-        if opt.get("requires_match_confirmed") and (case.get("master_data") or {}).get("outcome") != "CONFIRMED":
-            raise AppError("The steward must confirm the premise match first.")
-        if opt["option_id"] == "HOLD_FIELD_VERIFICATION" and case.get("field_outcome"):
-            raise AppError("Field verification is already recorded; choose the follow-up option.")
+            raise AppError("Option %s is not in playbook %s" % (option_id, self.playbook_id(t)))
+        rec = (t.get("investigation") or {}).get("recommended_option")
+        match = t.get("match") or {}
+        if match.get("status") == "REJECTED" and opt.get("terminal") != "RELEASE_AS_IS":
+            raise AppError("The ID match was rejected: only 'Release as-is' (DRI override) or false-positive cancellation remain.")
+        if opt.get("requires_match_confirmed") and match and match.get("status") != "CONFIRMED":
+            raise AppError("The Analyst must confirm the ID match first.")
+        override = option_id != rec
+        level = doa_level(t, self.cfg.app(), override)
+        if level == "L0" and t.get("returned"):
+            level = "L1"                       # a returned ticket goes to the DRI, never back to L0
+        need = "BILLING_OPS" if level == "L0" else "DRI"
+        if u["persona"] != need:
+            self.deny(u, ds, sc, "decide a %s ticket (DoA %s requires %s)" % (t["amount"], level, "the Analyst" if need == "BILLING_OPS" else "the DRI"), t["ticket_id"])
+        if level != "L0" and (t.get("triage") or {}).get("by") == u["user_id"]:
+            self.deny(u, ds, sc, "approve their own proposal outside L0 (SoD-2)", t["ticket_id"])
+        if override and not reason:
+            raise AppError("Choosing a non-recommended option is an override: a written reason is required.")
         uid = u["user_id"]
-        case["decision"] = {"option_id": opt["option_id"], "label": opt["label"], "by": uid, "at": now_utc(), "reason": reason}
-        case["decisions"].append(case["decision"])
-        case["plan"] = None
-        self.log(ds, sc, uid, "DECISION_RECORDED", "case", case["case_id"], case["case_id"], None,
-                 {"option_id": opt["option_id"], "label": opt["label"], "recommended": (case.get("investigation") or {}).get("recommended_option")}, reason or None)
-        if opt.get("routes_to") == "FIELD_VERIFICATION" and not case.get("field_outcome"):
-            self._to(ds, sc, case, "FIELD_VERIFICATION", uid)
-            return None
+        t["decision"] = {"option_id": opt["option_id"], "label": opt["label"], "by": uid, "persona": u["persona"], "at": ts(self.clock.now()),
+                         "reason": reason or None, "override": override, "level": level, "terminal": opt.get("terminal")}
+        t["decisions"].append(t["decision"])
+        t["doa_level"] = level
+        t["plan"] = None
+        self._first_action(t)
+        if override:
+            self.log(ds, sc, uid, "OVERRIDE_RECORDED", "ticket", t["ticket_id"], t["ticket_id"], {"recommended": rec}, {"option_id": opt["option_id"], "level": level}, reason)
         term = opt.get("terminal")
+        if term == "DEFER":
+            t["deferred"] = True
+            self.log(ds, sc, uid, "DECISION_RECORDED", "ticket", t["ticket_id"], t["ticket_id"], None,
+                     {"option_id": opt["option_id"], "label": opt["label"], "level": level, "note": "bill stays held until the next run"}, reason)
+            return None
+        if level == "L2":
+            self._transition(ds, sc, t, "PENDING_FINANCE", uid, "DECISION_RECORDED", reason or None,
+                             {"option_id": opt["option_id"], "label": opt["label"], "level": level, "override": override})
+            return None
         if term == "RELEASE_AS_IS":
-            if case["case_type"] == "PREVENT":
-                case["release"] = {"mode": "AS_IS", "reason": reason}
-                self._to(ds, sc, case, "READY_TO_RELEASE", uid, "Release as-is: " + reason)
-            else:
-                self._to(ds, sc, case, "CLOSED_NO_ACTION", uid, reason)
+            t["release"] = {"mode": "AS_IS", "reason": reason}
+            self._transition(ds, sc, t, "READY_TO_RELEASE", uid, "DECISION_RECORDED", reason,
+                             {"option_id": opt["option_id"], "label": opt["label"], "level": level, "override": True})
             return None
-        if term == "CLOSE" or not opt["steps"]:
-            self._to(ds, sc, case, "CLOSED_NO_ACTION", uid, reason or opt["label"])
-            return None
-        thr = self.cfg.app().get("finance_threshold", 1000.0)
-        exp = case["expected"]
-        needs_fin = (case["case_type"] == "PREVENT" and exp.get("reduction", 0) >= thr) or (case["case_type"] == "REMEDIATE" and exp.get("credit", 0) > 0)
-        if needs_fin and (case.get("finance") or {}).get("outcome") != "APPROVED":
-            self._to(ds, sc, case, "FINANCE_APPROVAL", uid, "Credit / reduction %s requires Finance approval" % fmt_money(case["amount_at_stake"]))
-            return None
-        self._to(ds, sc, case, "PLAN_APPROVAL", uid)
-        return (self._propose_plan, ds, sc, case["case_id"])
+        self._transition(ds, sc, t, "PLAN_APPROVAL", uid, "DECISION_RECORDED", reason or None,
+                         {"option_id": opt["option_id"], "label": opt["label"], "level": level, "override": override})
+        return (self._propose_plan, ds, sc, t["ticket_id"])
 
-    # ---- bill release ----------------------------------------------------------------------
+    # ---- bill release (SoD-3: Analyst only) ----------------------------------------------------
+    def _release_ticket(self, u, ds, sc, t):
+        st = self.store.get(ds, sc)
+        bid = t["draft_bill_id"]
+        if t["state"] != "READY_TO_RELEASE":
+            raise AppError("A held bill can only be released from READY_TO_RELEASE.")
+        v = self.view(ds, sc, sandbox=True)
+        vb = v.bills.get(bid, {}) if bid else {}
+        if (t.get("release") or {}).get("mode") == "AS_IS":
+            mode, amount, code, action = "AS_IS", (t["expected"] or {}).get("before"), "RESOLVED_RELEASED_AS_IS", "BILL_RELEASED"
+        elif vb.get("bill_status") == "CANCELLED":
+            mode, amount, code, action = "CANCELLED", 0.0, "RESOLVED_DRAFT_CANCELLED", "DRAFT_CANCELLATION_CONFIRMED"
+        else:
+            mode, amount, code, action = "REGENERATED", num(vb.get("total_amount")), "RESOLVED_CORRECTED", "BILL_RELEASED"
+        t["release"] = dict(t.get("release") or {}, released=True, mode=mode, amount=amount, by=u["user_id"])
+        if bid and bid in st["bills"]:
+            st["bills"][bid].update(released=True, release={"mode": mode, "amount": amount, "by": u["user_id"], "at": ts(self.clock.now())})
+        t["closure_code"] = code
+        self._transition(ds, sc, t, "RESOLVED", u["user_id"], action, (t.get("release") or {}).get("reason") if mode == "AS_IS" else None,
+                         {"bill_id": bid, "mode": mode, "amount": amount, "closure_code": code})
+
     def release(self, user_id, ds_id, sc_id, bill_ids=None, all_passed=False):
         u = self.user(user_id)
-        self.require(u, "billrun", ("A",), ds_id, sc_id, "release bills")
+        if u["persona"] != "BILLING_OPS":
+            self.deny(u, ds_id, sc_id, "release bills (SoD-3: only the Analyst releases)")
         with self.lock:
             st = self.store.get(ds_id, sc_id)
             if not st["gate"]:
                 raise AppError("Run the gate first.")
-            v = self.view(ds_id, sc_id, sandbox=True)
-            gate_bills = {b["bill_id"]: b for b in st["gate"]["bills"]}
-            targets = []
-            if all_passed:
-                targets += [b for b in st["gate"]["bills"] if b["outcome"] in ("PASSED", "NON_BLOCKING") and not st["bills"][b["bill_id"]]["released"]]
-            for bid in bill_ids or []:
-                b = gate_bills.get(bid)
-                if not b:
-                    raise NotFound("Bill %s is not in this run" % bid)
-                if st["bills"][bid]["released"]:
-                    continue
-                if b["outcome"] == "HELD":
-                    case = next((c for c in st["cases"].values() if c["draft_bill_id"] == bid and c["case_type"] == "PREVENT"), None)
-                    if not case or case["state"] != "READY_TO_RELEASE":
-                        raise AppError("Held bill %s can be released only when its case is READY_TO_RELEASE." % bid)
-                targets.append(b)
             released = []
-            for b in targets:
-                bid = b["bill_id"]
-                case = next((c for c in st["cases"].values() if c["draft_bill_id"] == bid and c["case_type"] == "PREVENT"), None)
-                vb = v.bills.get(bid, {})
-                if case and (case.get("release") or {}).get("mode") == "AS_IS":
-                    mode, amount = "AS_IS", b["total"]
-                elif vb.get("bill_status") == "CANCELLED":
-                    mode, amount = "CANCELLED", 0.0
-                elif vb.get("bill_status") == "REGENERATED":
-                    mode, amount = "REGENERATED", num(vb["total_amount"])
-                else:
-                    mode, amount = "ORIGINAL", b["total"]
-                st["bills"][bid].update(released=True, release={"mode": mode, "amount": amount, "by": user_id, "at": now_utc()})
-                self.log(ds_id, sc_id, user_id, "BILL_RELEASED", "bill", bid, case["case_id"] if case else None,
-                         {"total": b["total"]}, {"mode": mode, "amount": amount})
-                if case and case["state"] == "READY_TO_RELEASE":
-                    case["release"] = dict(case.get("release") or {}, released=True, mode=mode, amount=amount)
-                    self._to(ds_id, sc_id, case, "RESOLVED", user_id)
+            if all_passed:
+                for b in st["gate"]["bills"]:
+                    if b["outcome"] in ("PASSED", "NON_BLOCKING") and not st["bills"][b["bill_id"]]["released"]:
+                        st["bills"][b["bill_id"]].update(released=True, release={"mode": "ORIGINAL", "amount": b["total"], "by": user_id, "at": ts(self.clock.now())})
+                        self.log(ds_id, sc_id, user_id, "BILL_RELEASED", "bill", b["bill_id"], None, {"outcome": b["outcome"]}, {"mode": "ORIGINAL", "amount": b["total"]})
+                        released.append(b["bill_id"])
+            for bid in bill_ids or []:
+                t = next((x for x in st["tickets"].values() if x["draft_bill_id"] == bid and x["type"] == "PREVENT"), None)
+                if not t:
+                    raise NotFound("No held-bill ticket for %s" % bid)
+                self._release_ticket(u, ds_id, sc_id, t)
                 released.append(bid)
             self._save(ds_id, sc_id)
             return released
 
-    # ---- integration issues ------------------------------------------------------------------
-    def issue_action(self, user_id, ds_id, sc_id, issue_id, action, ticket_ref=None, note=None):
+    def export_register(self, user_id, ds_id, sc_id):
         u = self.user(user_id)
-        self.require(u, "integration", ("A",), ds_id, sc_id, "update integration issues")
-        with self.lock:
-            st = self.store.get(ds_id, sc_id)
-            iss = st["issues"].get(issue_id)
-            if not iss:
-                raise NotFound("Unknown issue %s" % issue_id)
-            before = {"status": iss["status"], "ticket_ref": iss["ticket_ref"]}
-            if ticket_ref is not None:
-                iss["ticket_ref"] = ticket_ref.strip()
-            if action == "ACKNOWLEDGE":
-                iss["status"] = "ACKNOWLEDGED" if iss["status"] == "OPEN" else iss["status"]
-                ev = "INTEGRATION_ISSUE_ACKNOWLEDGED"
-            elif action == "RESOLVE":
-                iss["status"] = "RESOLVED"
-                ev = "INTEGRATION_ISSUE_RESOLVED"
-            elif action == "SET_TICKET":
-                ev = "INTEGRATION_ISSUE_ACKNOWLEDGED"
-                if iss["status"] == "OPEN":
-                    iss["status"] = "ACKNOWLEDGED"
-            else:
-                raise AppError("Unknown issue action")
-            iss["history"].append({"action": action, "by": user_id, "at": now_utc(), "ticket_ref": iss["ticket_ref"], "note": note})
-            self.log(ds_id, sc_id, user_id, ev, "integration_issue", issue_id, None, before, {"status": iss["status"], "ticket_ref": iss["ticket_ref"]}, note)
-            self._save(ds_id, sc_id)
-            return iss
+        self.require(u, "register", ("A",), ds_id, sc_id, "export the root-cause register")
+        st = self.store.get(ds_id, sc_id)
+        rows = ["Engineering handoff - root-cause register (%s / %s, exported %s)" % (ds_id, sc_id, ts(self.clock.now())),
+                "signature,ticket_ids,affected_accounts,work_orders,messages,first_seen,last_seen"]
+        for e in st["register"].values():
+            vals = [e["signature"], " ".join(e["ticket_ids"]), str(len(e["accounts"])), " ".join(e["wo_ids"]), " ".join(e["msg_ids"]), e["first_seen"], e["last_seen"]]
+            rows.append(",".join('"%s"' % x.replace('"', '""') if re.search(r'[",]', x) else x for x in vals))
+        self.log(ds_id, sc_id, user_id, "REGISTER_EXPORTED", "register", sc_id, None, None, {"signatures": len(st["register"])})
+        return "\r\n".join(rows)
 
-    # ---- demo tools -------------------------------------------------------------------------
+    # ---- demo tools ---------------------------------------------------------------------------
     def reset(self, user_id, ds_id=None, sc_id=None, scope="current"):
-        actor = user_id
         if user_id:
-            u = self.user(user_id)
-            if u["role"] in self.cfg.perms().get("demo_tools_blocked_roles", []):
-                self.log(ds_id, sc_id, user_id, "PERMISSION_DENIED", "demo", "reset", reason="read-only role")
-                raise PermissionDenied("Read-only role cannot reset demo state")
+            self.user(user_id)
         with self.lock:
             if scope == "all":
                 self.store.reset()
+                self.clock.reset()
             else:
                 self.store.reset(ds_id, sc_id)
             self._views.clear()
-            self.log(ds_id if scope != "all" else None, sc_id if scope != "all" else None, actor or "sys.cli", "DEMO_RESET", "state",
-                     scope, reason="Case state and sandbox cleared (%s); audit log kept" % scope)
+            self.log(ds_id if scope != "all" else None, sc_id if scope != "all" else None, user_id or "sys.cli", "DEMO_RESET", "state",
+                     scope, reason="Tickets and sandbox cleared (%s); audit log kept" % scope)
 
     def set_inject_failure(self, user_id, ds_id, sc_id, enabled):
-        u = self.user(user_id)
-        if u["role"] in self.cfg.perms().get("demo_tools_blocked_roles", []):
-            self.log(ds_id, sc_id, user_id, "PERMISSION_DENIED", "demo", "inject_failure", reason="read-only role")
-            raise PermissionDenied("Read-only role cannot use demo tools")
+        self.user(user_id)
         with self.lock:
             st = self.store.get(ds_id, sc_id)
             st["inject_failure"] = bool(enabled)
             self.log(ds_id, sc_id, user_id, "DEMO_FAILURE_ARMED" if enabled else "DEMO_FAILURE_DISARMED", "demo", "inject_failure")
             self._save(ds_id, sc_id)
 
-    # ---- read models (dashboard, my work, case views) ----------------------------------------
-    def case_view(self, u, case, full=None):
-        lvl = self.cfg.level(u["role"], "case_detail")
-        if full is None:
-            full = lvl in ("V", "A")
-        if full:
-            out = copy.deepcopy(case)
-            out["view"] = "full"
-        else:
-            out = {k: copy.deepcopy(case.get(k)) for k in ("case_id", "case_type", "state", "scenario_id", "scenario_time", "account_id", "customer_name",
-                                                           "customer_class", "premise", "meter_id", "sa_id", "root_wo_id", "root_wo_premise",
-                                                           "disconnect_date", "wo_subtype", "window", "gates", "amount_at_stake", "unmatched_premise",
-                                                           "suggested_premise", "master_data", "field_outcome", "integration_issue_id", "history", "draft_bill_id")}
-            inv = case.get("investigation") or {}
-            out["summary"] = inv.get("summary")
-            out["view"] = "task"
-        out["owner_role"] = STATE_OWNER.get(case["state"])
-        out["allowed_actions"] = self.allowed_actions(u, case)
-        if case.get("investigation") or case.get("state") not in TERMINAL:
-            out["playbook"] = self.cfg.playbooks().get(self.playbook_id(case))
+    def start_autopilot(self, user_id, ds_id, sc_id):
+        self.user(user_id)
+        with self.lock:
+            st = self.store.get(ds_id, sc_id)
+            if st.get("autopilot") and st["autopilot"].get("running"):
+                raise AppError("Autopilot is already running for this scenario.")
+            st["autopilot"] = {"running": True, "started_by": user_id, "started_at": ts(self.clock.now()), "steps": 0, "done": False}
+        self._spawn(self.autopilot, ds_id, sc_id)
+
+    def autopilot(self, ds_id, sc_id):
+        """Perform each persona's recommended action in turn; every event is logged as that user with autopilot = true."""
+        _AP.on = True
+        st = self.store.get(ds_id, sc_id)
+        sc = self.scenario(ds_id, sc_id)
+        if st.get("autopilot") is None:
+            st["autopilot"] = {"running": True, "steps": 0, "done": False}
+        try:
+            if sc["kind"] == "REPLAY" and not st["gate"]:
+                self.run_gate("u.billops", ds_id, sc_id)
+            if sc["kind"] == "BACKSCAN" and not st["backscan_sent"]:
+                self.send_backscan("u.billops", ds_id, sc_id)
+            idle = 0
+            for _ in range(2000):
+                progressed = False
+                for t in list(st["tickets"].values()):
+                    try:
+                        progressed |= self._autopilot_step(ds_id, sc_id, t)
+                    except AppError as e:
+                        st["autopilot"]["error"] = "%s: %s" % (t["ticket_id"], e)
+                        return
+                if all(t["state"] in DONE_STATES or (t["state"] == "AWAITING_DECISION" and t.get("deferred")) for t in st["tickets"].values()):
+                    break
+                if progressed:
+                    idle = 0
+                    st["autopilot"]["steps"] += 1
+                else:
+                    idle += 1
+                    if self.sync and idle > 2:
+                        break
+                    time.sleep(0.25)
+                    if idle > 600:
+                        break
+            if st["gate"]:
+                self.release("u.billops", ds_id, sc_id, all_passed=True)
+            for t in st["tickets"].values():
+                if (t.get("decision") or {}).get("level") == "L0" and not t.get("digest"):
+                    self.act("u.dri", ds_id, sc_id, t["ticket_id"], "L0_REVIEW", {"comment": "Reviewed in daily digest"})
+            st["autopilot"]["done"] = True
+        finally:
+            _AP.on = False
+            st["autopilot"]["running"] = False
+            self._save(ds_id, sc_id)
+
+    def _autopilot_step(self, ds_id, sc_id, t):
+        s, tid = t["state"], t["ticket_id"]
+        inv = t.get("investigation") or {}
+        if s == "TRIAGE":
+            if t.get("match") and t["match"]["status"] == "PENDING":
+                self.act("u.billops", ds_id, sc_id, tid, "CONFIRM_MATCH", {"note": "O/0 look-alike; candidate meter turns ESTIMATED the day after the disconnect"})
+            self.act("u.billops", ds_id, sc_id, tid, "CONFIRM_TRIAGE", {"proposed_option": inv.get("recommended_option"), "decide": t["doa_level"] == "L0"})
+            return True
+        if s == "AWAITING_DECISION" and not t.get("deferred"):
+            who = "u.billops" if t["doa_level"] == "L0" else "u.dri"
+            self.act(who, ds_id, sc_id, tid, "DECIDE", {"option_id": inv.get("recommended_option")})
+            return True
+        if s == "PENDING_FINANCE":
+            self.act("u.finance", ds_id, sc_id, tid, "FINANCE_APPROVE", {})
+            return True
+        if s == "PLAN_APPROVAL" and t.get("plan"):
+            self.act(t["decision"]["by"], ds_id, sc_id, tid, "APPROVE_PLAN", {})
+            return True
+        if s == "COMMS_APPROVAL":
+            self.act("u.dri", ds_id, sc_id, tid, "APPROVE_COMMS", {})
+            return True
+        if s == "READY_TO_RELEASE":
+            self.act("u.billops", ds_id, sc_id, tid, "RELEASE", {})
+            return True
+        return False
+
+    # ---- read models ------------------------------------------------------------------------
+    def sla_view(self, t):
+        """SLA status for display: per clock elapsed %, due time and state."""
+        cal, now = self.cal(), self.clock.now()
+        out = {}
+        for name in ("first_action", "resolve", "finance"):
+            c = t["sla"].get(name)
+            if not c:
+                continue
+            target = cal.elapsed(pts(c["start"]), pts(c["due"])) or 1e-9
+            end = pts(c["met_at"]) if c.get("met_at") else now
+            pct = cal.elapsed(pts(c["start"]), end) / target
+            out[name] = {"due": c["due"], "met_at": c.get("met_at"), "pct": round(pct * 100, 1),
+                         "remaining_business_hours": round(max(0.0, target - cal.elapsed(pts(c["start"]), end)), 2),
+                         "status": "MET" if c.get("met_at") and pct <= 1 else "BREACHED" if pct >= 1 else "AT_RISK" if pct >= 0.75 else "ON_TRACK"}
+        for k in ("held_deadline", "advance_deadline", "next_run_real"):
+            if t["sla"].get(k):
+                out[k] = t["sla"][k]
+        active = [v for k, v in out.items() if isinstance(v, dict) and not v.get("met_at")]
+        out["worst"] = "BREACHED" if any(v["status"] == "BREACHED" for v in active) else "AT_RISK" if any(v["status"] == "AT_RISK" for v in active) else "ON_TRACK" if active else "MET"
         return out
 
-    def can_see_case(self, u, case):
-        lvl = self.cfg.level(u["role"], "case_detail")
-        return lvl in ("V", "A") or (lvl == "OWN" and u["role"] in case["roles_involved"])
-
-    def task_context(self, ds_id, sc_id, case):
-        """Extra facts for the role task panels (master data read timing, field reads)."""
-        v = self.view(ds_id, sc_id, sandbox=False)
-        reads = v.reads_by_meter.get(case["meter_id"], {})
-        dd = case["disconnect_date"]
-        around = [reads[d] for d in day_range(add_days(dd, -2), min(add_days(dd, 4), v.reads_until() or dd)) if d in reads]
-        sa = v.sas.get(case["sa_id"], {})
-        return {"reads_around_disconnect": [{k: r[k] for k in ("read_id", "read_date", "kwh", "read_quality")} for r in around],
-                "sa": {k: sa.get(k) for k in ("sa_id", "sa_status", "tariff_code", "premise_address", "stop_date")},
-                "meter": v.meters.get(case["meter_id"])}
+    def ticket_view(self, u, t):
+        out = copy.deepcopy(t)
+        out["assignee_persona"] = self.assignee(t)
+        out["allowed_actions"] = self.allowed_actions(u, t)
+        out["sla_view"] = self.sla_view(t)
+        out["playbook"] = self.cfg.playbooks().get(self.playbook_id(t))
+        lvl = self.cfg.level(u["persona"], "ticket")
+        out["view"] = "finance" if u["persona"] == "FINANCE" else "full"
+        if lvl == "-":
+            out = {"ticket_id": t["ticket_id"], "state": t["state"], "view": "none"}
+        return out
 
     def my_work(self, u, ds_id, sc_id):
         st = self.store.get(ds_id, sc_id)
         sc = self.scenario(ds_id, sc_id)
-        role = u["role"]
-        items = []
-
-        def age(c):
-            try:
-                t0 = datetime.fromisoformat(c["history"][-1]["at"])
-                return int((datetime.now(timezone.utc) - t0).total_seconds())
-            except (ValueError, KeyError, IndexError):
-                return 0
-        if role == "BILLING_OPS":
+        p, items = u["persona"], []
+        if p == "BILLING_OPS":
             if sc["kind"] == "REPLAY" and not st["gate"]:
-                items.append({"kind": "GATE", "next_action": "Run the pre-bill gate for %s" % sc["label"], "screen": "billrun", "age": 0, "amount": None})
+                items.append({"kind": "GATE", "next_action": "Run the pre-bill gate for %s" % sc["label"], "screen": "billrun"})
             if st["gate"]:
                 n = sum(1 for b in st["gate"]["bills"] if b["outcome"] in ("PASSED", "NON_BLOCKING") and not st["bills"][b["bill_id"]]["released"])
                 if n:
-                    items.append({"kind": "RELEASE", "next_action": "Release %d passed bill(s)" % n, "screen": "billrun", "age": 0, "amount": None})
-            if sc["kind"] == "BACKSCAN" and not st["backscan_sent"]:
-                items.append({"kind": "BACKSCAN", "next_action": "Send back-scan findings to the workflow", "screen": "backscan", "age": 0, "amount": None})
-        if role == "INTEGRATION":
-            for iss in st["issues"].values():
-                if iss["status"] != "RESOLVED":
-                    items.append({"kind": "ISSUE", "issue_id": iss["issue_id"], "next_action": "%s: %s" % ("Acknowledge" if iss["status"] == "OPEN" else "Fix root cause", iss["signature"]),
-                                  "screen": "integration", "age": 0, "amount": None, "case_type": "INTEGRATION", "customer_name": "%d case(s)" % len(iss["case_ids"])})
-        nxt = {"MASTER_DATA_REVIEW": "Confirm or reject the suggested premise match", "DRI_DECISION": "Decide the option",
-               "RETURNED_TO_DRI": "Re-decide (returned)", "FIELD_VERIFICATION": "Record the field outcome", "FINANCE_APPROVAL": "Approve or reject the credit",
-               "PLAN_APPROVAL": "Approve the execution plan", "REGULATORY_REVIEW": "Review the customer letter and regulator response",
-               "READY_TO_RELEASE": "Release the corrected bill"}
-        for c in st["cases"].values():
-            if STATE_OWNER.get(c["state"]) == role:
-                if c["state"] == "PLAN_APPROVAL" and not c.get("plan"):
-                    continue
-                items.append({"kind": "CASE", "case_id": c["case_id"], "case_type": c["case_type"], "customer_name": c["customer_name"],
-                              "account_id": c["account_id"],
-                              "amount": c["amount_at_stake"], "state": c["state"], "next_action": nxt.get(c["state"], c["state"]),
-                              "screen": {"MASTER_DATA_REVIEW": "masterdata", "FIELD_VERIFICATION": "field", "FINANCE_APPROVAL": "finance",
-                                         "REGULATORY_REVIEW": "regulatory", "READY_TO_RELEASE": "billrun"}.get(c["state"], "case"),
-                              "age": age(c)})
-        items.sort(key=lambda i: -(i.get("age") or 0))
+                    items.append({"kind": "RELEASE", "next_action": "Release %d passed bill(s)" % n, "screen": "billrun"})
+            if sc["kind"] == "BACKSCAN":
+                n = sum(1 for r in self.backscan_candidates(ds_id, sc_id) if r["eligible"] and not r["sent"])
+                if n:
+                    items.append({"kind": "BACKSCAN", "next_action": "Send %d eligible back-scan finding(s) to the workflow" % n, "screen": "backscan"})
+        nxt = {"TRIAGE": "Triage%s", "AWAITING_DECISION": "Decide (%s)", "PENDING_FINANCE": "Approve or reject the financial impact",
+               "PLAN_APPROVAL": "Approve the execution plan", "COMMS_APPROVAL": "Approve the customer letter / regulator response",
+               "READY_TO_RELEASE": "Release the bill / confirm the cancellation"}
+        for t in st["tickets"].values():
+            mine = self.assignee(t) == p and t["state"] in nxt
+            if t["state"] == "PLAN_APPROVAL":
+                mine = bool(t.get("plan")) and (t.get("decision") or {}).get("by") == u["user_id"]
+            if t["state"] == "TRIAGE" and t.get("cancel_request"):
+                mine = p == "DRI"
+            if mine:
+                txt = nxt[t["state"]]
+                if t["state"] == "TRIAGE":
+                    txt = "Approve the false-positive cancellation" if t.get("cancel_request") else txt % (" and confirm the ID match" if (t.get("match") or {}).get("status") == "PENDING" else "")
+                elif t["state"] == "AWAITING_DECISION":
+                    txt = txt % ("returned" if t.get("returned") else "DoA " + (t.get("doa_level") or ""))
+                sv = self.sla_view(t)
+                items.append({"kind": "TICKET", "ticket_id": t["ticket_id"], "type": t["type"], "customer_name": t["customer_name"], "account_id": t["account_id"],
+                              "amount": t["amount"], "priority": t["priority"], "state": t["state"], "next_action": txt, "screen": "ticket",
+                              "sla": sv.get("resolve"), "sla_worst": sv["worst"], "doa_level": t["doa_level"], "returned": t.get("returned")})
+        if p == "DRI":
+            for t in st["tickets"].values():
+                if (t.get("decision") or {}).get("level") == "L0" and not t.get("digest"):
+                    items.append({"kind": "DIGEST", "ticket_id": t["ticket_id"], "type": t["type"], "customer_name": t["customer_name"], "account_id": t["account_id"],
+                                  "amount": t["amount"], "priority": t["priority"], "state": t["state"], "next_action": "Review L0 decision in the digest",
+                                  "screen": "digest", "flagged": self.digest_flagged(t)})
+        order = {"P1": 0, "P2": 1, "P3": 2, "P4": 3, None: 4}
+        items.sort(key=lambda i: (order.get(i.get("priority")), (i.get("sla") or {}).get("due") or "9999"))
         return items
+
+    def digest_flagged(self, t):
+        d = t.get("decision") or {}
+        if t.get("digest") or not d.get("at"):
+            return False
+        return self.clock.now() > self.cal().add_days(pts(d["at"]), self.cfg.sla()["l0_digest_review_business_days"])
 
     def kpis(self, ds_id, sc_id):
         st = self.store.get(ds_id, sc_id)
-        cases = list(st["cases"].values())
-        prevent = [c for c in cases if c["case_type"] == "PREVENT"]
-        rem = [c for c in cases if c["case_type"] == "REMEDIATE"]
-        by_state = OrderedDict((s, sum(1 for c in cases if c["state"] == s)) for s in STATES)
-        realized = money(sum(c["amount_at_stake"] for c in prevent if (c.get("release") or {}).get("mode") in ("REGENERATED", "CANCELLED")))
-        approved = money(sum(c["amount_at_stake"] for c in rem if (c.get("finance") or {}).get("outcome") == "APPROVED"))
+        tk = list(st["tickets"].values())
+        open_t = [t for t in tk if t["state"] not in DONE_STATES]
+        by_state = OrderedDict((s, sum(1 for t in tk if t["state"] == s)) for s in self.cfg.workflow()["states"])
+        by_prio = OrderedDict((p, sum(1 for t in open_t if t["priority"] == p)) for p in PRIORITIES)
+        worst = [self.sla_view(t)["worst"] for t in open_t]
+        prevent = [t for t in tk if t["type"] == "PREVENT"]
+        rem = [t for t in tk if t["type"] == "REMEDIATE"]
         g = st["gate"]
-        return {"drafts": len(g["bills"]) if g else None, "counts": g["counts"] if g else None,
-                "open_cases": sum(1 for c in cases if c["state"] not in TERMINAL), "cases_total": len(cases), "by_state": by_state,
-                "prevented_identified": money(sum(c["amount_at_stake"] for c in prevent)), "prevented_realized": realized,
-                "remediated_identified": money(sum(c["amount_at_stake"] for c in rem)), "remediated_approved": approved,
-                "open_issues": sum(1 for i in st["issues"].values() if i["status"] != "RESOLVED"),
-                "released": sum(1 for b in st["bills"].values() if b["released"])}
+        return {"drafts": len(g["bills"]) if g else None, "counts": g["counts"] if g else None, "open": len(open_t), "total": len(tk),
+                "by_state": by_state, "by_priority": by_prio, "sla_at_risk": worst.count("AT_RISK"), "sla_breached": worst.count("BREACHED"),
+                "prevented_identified": money(sum(t["amount"] for t in prevent if t["state"] != "CANCELLED")),
+                "prevented_realized": money(sum(t["amount"] for t in prevent if (t.get("release") or {}).get("mode") in ("REGENERATED", "CANCELLED"))),
+                "remediated_identified": money(sum(t["amount"] for t in rem if t["state"] != "CANCELLED")),
+                "remediated_approved": money(sum(t["amount"] for t in rem if (t.get("finance") or {}).get("outcome") == "APPROVED")),
+                "l0_awaiting_review": sum(1 for t in tk if (t.get("decision") or {}).get("level") == "L0" and not t.get("digest")),
+                "released": sum(1 for b in st["bills"].values() if b["released"]), "notifications": st["notifications"][-10:]}
 
     def audit_query(self, f, limit=500):
-        evs = list(self.audit.events)
         q = (f.get("q") or "").lower()
 
         def keep(e):
             if f.get("user") and e.get("actor_id") != f["user"]:
                 return False
-            if f.get("role") and e.get("actor_role") != f["role"] and not (f["role"] in ("SYSTEM", "AGENT") and e.get("actor_type") == f["role"]):
+            if f.get("persona") and e.get("actor_persona") != f["persona"] and not (f["persona"] in ("SYSTEM", "AGENT") and e.get("actor_type") == f["persona"]):
                 return False
             if f.get("action") and e.get("action") != f["action"]:
                 return False
-            if f.get("case") and e.get("case_id") != f["case"]:
+            if f.get("ticket") and e.get("ticket_id") != f["ticket"]:
                 return False
             if f.get("scenario") and e.get("scenario_id") != f["scenario"]:
                 return False
@@ -2956,30 +3414,33 @@ class Engine:
                 return False
             if f.get("to") and (e.get("timestamp_local") or "")[:10] > f["to"]:
                 return False
-            if f.get("case_ids") is not None and e.get("case_id") not in f["case_ids"]:
+            if f.get("ticket_ids") is not None and e.get("ticket_id") not in f["ticket_ids"]:
                 return False
             if q and q not in json.dumps(e, ensure_ascii=False).lower():
                 return False
             return True
-        out = [e for e in evs if keep(e)]
+        out = [e for e in list(self.audit.events) if keep(e)]
         return {"total": len(out), "events": out[::-1][:limit]}
 
 
+def next_run_after(run_ts):
+    """Next monthly bill run (same day of month and time)."""
+    y, m = int(run_ts[:4]), int(run_ts[5:7]) + 1
+    if m > 12:
+        y, m = y + 1, 1
+    return "%04d-%02d-%s" % (y, m, run_ts[8:])
+
+
 # =============================================================================================
-# SECTION 14 - SELF-TEST (isolated: in-memory state and audit log, agent latency 0)
+# SECTION 15 - SELF-TEST (isolated: in-memory state and audit log, agent latency 0, fixed clock)
 # =============================================================================================
 DATE_FIELD = {F_WO: ("completed_at", "created_at"), F_MSG: ("received_at",), F_TODO: ("created_at",), F_CRM: ("opened_at",),
               F_READ: ("read_date",), F_BILL: ("bill_run_at",), F_SA: ("start_date",), F_GL: ("posting_date",)}
-ROLE_OF_ACTION = {"GATE_RUN_STARTED": "BILLING_OPS", "MATCH_CONFIRMED": "MASTER_DATA", "MATCH_REJECTED": "MASTER_DATA",
-                  "DECISION_RECORDED": "DRI", "FIELD_OUTCOME_RECORDED": "FIELD_OPS", "FINANCE_APPROVED": "FINANCE",
-                  "FINANCE_REJECTED": "FINANCE", "PLAN_APPROVED": "DRI", "BILL_RELEASED": "BILLING_OPS"}
-ACTOR_OF_ACTION = {"AGENT_TOOL_CALL": ("agent.investigator", "agent.executor"), "INVESTIGATION_COMPLETED": ("agent.investigator",),
-                   "PLAN_PROPOSED": ("agent.executor",), "STEP_EXECUTED": ("agent.executor",), "VERIFICATION_PASSED": ("sys.verifier",),
-                   "BILL_HELD": ("sys.gate",), "BILL_PASSED": ("sys.gate",), "GATE_RUN_COMPLETED": ("sys.gate",)}
+SELFTEST_BASE = datetime(2026, 11, 23, 9, 0, 0)        # a Monday 09:00, so SLA checks are deterministic
 
 
 class _LoopingLLM(LLMClient):
-    """Test double: never finishes, to prove the 12-call budget is enforced."""
+    """Test double that never finishes, to prove the 12-call budget is enforced."""
     AGENT_MODE = "MOCK"
     available = True
 
@@ -2992,11 +3453,15 @@ class SelfTest:
         self.cfg, self.registry, self.hashes, self.data_dir = cfg, registry, source_hashes, data_dir
 
     def engine(self):
-        return Engine(self.cfg, self.registry, Store(None), AuditLog(None), latency_ms=0, sync=True)
+        return Engine(self.cfg, self.registry, Store(None), AuditLog(None), latency_ms=0, sync=True, clock=Clock(base=SELFTEST_BASE))
 
     @staticmethod
     def row(name, expected, actual, ok, detail=None):
         return {"check": name, "expected": str(expected), "actual": str(actual), "pass": bool(ok), "detail": detail}
+
+    @staticmethod
+    def find(eng, ds, ds_id, sc_id, code, ttype):
+        return next((t for t in eng.store.get(ds_id, sc_id)["tickets"].values() if t["type"] == ttype and ds.case_codes.get(t["account_id"]) == code), None)
 
     def run(self):
         t0 = time.time()
@@ -3017,156 +3482,131 @@ class SelfTest:
                     else:
                         eng.send_backscan("u.billops", ds_id, sc_id)
                     runs[(ds_id, sc_id)] = eng
-                    rows = self.check_gate(eng, ds, ds_id, sc_id, e, tol)
-                except Exception as ex:      # report, don't crash the self-test
-                    rows = [self.row("scenario ran", "ok", "%s: %s" % (type(ex).__name__, ex), False, traceback.format_exc()[-600:])]
-                groups.append({"name": "Gate & cases - %s - %s" % (ds.name, sc_id), "rows": rows})
-        groups.append({"name": "Investigation output (agent, mocked LLM)", "rows": self.check_investigations(exp, runs)})
-        groups.append({"name": "Point-in-time: no citation after scenario time", "rows": self.check_no_future(runs)})
-        groups.append({"name": "End-to-end RUN_2026-11-02 (each role does only its own steps)", "rows": self.check_e2e()})
-        groups.append({"name": "Guardrails", "rows": self.check_guardrails()})
-        groups.append({"name": "POC 1 back-scan / daily check (server port vs answer_key.csv)", "rows": self.check_poc1()})
-        groups.append({"name": "Source CSVs unchanged (SHA-256)", "rows": self.check_csvs()})
+                    rows = self.check_tickets(eng, ds, ds_id, sc_id, e, tol, exp)
+                except Exception as ex:
+                    rows = [self.row("scenario ran", "ok", "%s: %s" % (type(ex).__name__, ex), False, traceback.format_exc()[-700:])]
+                groups.append({"name": "Gate, tickets, priority & DoA - %s - %s" % (ds.name, sc_id), "rows": rows})
+        for name, fn in (("Investigation output (agent, mocked LLM)", lambda: self.check_investigations(exp, runs)),
+                         ("Point-in-time: no citation after scenario time", lambda: self.check_no_future(runs)),
+                         ("End-to-end autopilot RUN_2026-11-02 (Dataset A)", lambda: self.check_autopilot(exp)),
+                         ("Segregation of duties & permissions (server-enforced)", self.check_sod),
+                         ("Agent guardrails", self.check_guardrails),
+                         ("SLA, escalation, auto-P1, digest & auto-close (demo clock)", self.check_sla),
+                         ("POC 1 back-scan / daily check (server port vs answer_key.csv)", self.check_poc1),
+                         ("Source CSVs unchanged (SHA-256)", self.check_csvs)):
+            try:
+                rows = fn()
+            except Exception as ex:
+                rows = [self.row(name, "runs", "%s: %s" % (type(ex).__name__, ex), False, traceback.format_exc()[-900:])]
+            groups.append({"name": name, "rows": rows})
         for g in groups:
             g["pass"] = all(r["pass"] for r in g["rows"])
         return {"pass": all(g["pass"] for g in groups), "groups": groups, "elapsed_ms": int((time.time() - t0) * 1000),
                 "checks": sum(len(g["rows"]) for g in groups), "failed": sum(1 for g in groups for r in g["rows"] if not r["pass"])}
 
-    # ---- gate ------------------------------------------------------------------------------
-    def check_gate(self, eng, ds, ds_id, sc_id, e, tol):
+    # ---- gate & routing ------------------------------------------------------------------------
+    def check_tickets(self, eng, ds, ds_id, sc_id, e, tol, exp):
         rows = []
         st = eng.store.get(ds_id, sc_id)
-        cases = list(st["cases"].values())
+        tickets = list(st["tickets"].values())
         code = ds.case_codes
-        gb = {b["bill_id"]: b for b in (st["gate"] or {}).get("bills", [])}
-        thr = self.cfg.app().get("finance_threshold", 1000.0)
-
-        def find(ct, c):
-            return next((x for x in cases if x["case_type"] == ct and code.get(x["account_id"]) == c), None)
-        for h in e.get("held", []):
-            b = gb.get(h["bill_id"], {})
-            k = find("PREVENT", h["case"])
-            rows.append(self.row("%s %s held" % (h["case"], h["bill_id"]), "HELD (%s)" % h["case"],
-                                 "%s (%s)" % (b.get("outcome", "missing"), code.get(b.get("account_id"), "?")),
-                                 b.get("outcome") == "HELD" and code.get(b.get("account_id")) == h["case"]))
-            ex = (k or {}).get("expected", {})
-            want = "%s %s → %s" % (h["action"], fmt_money(h["before"]), fmt_money(h["after"]))
-            got = "%s %s → %s" % (ex.get("action"), fmt_money(ex.get("before", 0)), fmt_money(ex.get("after", 0))) if k else "no case"
-            rows.append(self.row("%s draft correction" % h["case"], want, got, bool(k) and ex.get("action") == h["action"]
-                                 and abs(ex["before"] - h["before"]) <= tol and abs(ex["after"] - h["after"]) <= tol))
-            if "fixed_retained" in h:
-                rows.append(self.row("%s fixed charges retained" % h["case"], fmt_money(h["fixed_retained"]), fmt_money(ex.get("fixed_retained", 0)),
-                                     abs(ex.get("fixed_retained", 0) - h["fixed_retained"]) <= tol))
-            if h.get("via"):
-                rows.append(self.row("%s held via %s" % (h["case"], h["via"]), h["via"], ",".join((k or {}).get("gates", [])), h["via"] in (k or {}).get("gates", [])))
-            if k:
-                needs = ex.get("reduction", 0) >= thr
-                rows.append(self.row("%s requires FINANCE_APPROVAL" % h["case"], h["finance"], needs, needs == h["finance"]))
-        for nb in e.get("non_blocking", []):
-            b = gb.get(nb["bill_id"], {})
-            k = find("ADVANCE", nb["case"])
-            rows.append(self.row("%s %s non-blocking + ADVANCE case" % (nb["case"], nb["bill_id"]), "NON_BLOCKING, ADVANCE stop %s" % nb["stop_effective"],
-                                 "%s, %s" % (b.get("outcome"), ("ADVANCE stop %s" % k["expected"]["stop_effective"]) if k else "no ADVANCE case"),
-                                 b.get("outcome") == "NON_BLOCKING" and k and k["expected"]["stop_effective"] == nb["stop_effective"]))
-        for c in e.get("revenue_protection", []):
-            k = find("REVENUE_PROTECTION", c)
-            rows.append(self.row("%s REVENUE_PROTECTION case" % c, "opened", "opened (%s kWh unbilled)" % fmt_kwh(k["expected"]["unbilled_kwh"]) if k else "missing", bool(k)))
-        for r in e.get("remediate", []):
-            k = find("REMEDIATE", r["case"])
-            ok = bool(k) and abs(k["expected"]["credit"] - r["credit"]) <= tol
-            if ok and "bills" in r:
-                ok = sorted(k["expected"]["bill_ids"]) == sorted(r["bills"])
-            rows.append(self.row("%s REMEDIATE credit" % r["case"], "%s %s" % (fmt_money(r["credit"]), ",".join(r.get("bills", []))),
-                                 ("%s %s" % (fmt_money(k["expected"]["credit"]), ",".join(k["expected"]["bill_ids"]))) if k else "missing", ok))
-            if r.get("via"):
-                rows.append(self.row("%s REMEDIATE via %s" % (r["case"], r["via"]), r["via"], ",".join((k or {}).get("gates", [])), bool(k) and r["via"] in k["gates"]))
-            if "regulatory_review" in r:
-                rows.append(self.row("%s requires REGULATORY_REVIEW" % r["case"], r["regulatory_review"], (k or {}).get("requires_regulatory"),
-                                     bool(k) and k["requires_regulatory"] == r["regulatory_review"]))
-        want_codes = {x["case"] for x in e.get("held", []) + e.get("non_blocking", []) + e.get("remediate", [])} | set(e.get("revenue_protection", []))
-        extra = sorted({"%s:%s" % (code.get(c["account_id"], "background " + c["account_id"]), c["case_type"]) for c in cases
-                        if code.get(c["account_id"]) not in want_codes})
-        rows.append(self.row("No control (N1-N5) or background account held or opened as a case", "none", ", ".join(extra) or "none", not extra))
-        held_extra = sorted(b for b, x in gb.items() if x["outcome"] == "HELD" and b not in {h["bill_id"] for h in e.get("held", [])})
-        if "held" in e:
-            rows.append(self.row("No unexpected held bills", "none", ", ".join(held_extra) or "none", not held_extra))
+        want = set()
+        for x in e.get("tickets", []):
+            want.add((x["case"], x["type"]))
+            t = self.find(eng, ds, ds_id, sc_id, x["case"], x["type"])
+            tag = "%s %s" % (x["case"], x["type"])
+            if not t:
+                rows.append(self.row(tag + " ticket", "created", "missing", False))
+                continue
+            ex = t["expected"]
+            got = "%s · %s · %s · DoA %s" % (fmt_money(t["amount"]), t["priority"], t["impact"] + "/" + t["urgency"], t["doa_level"])
+            ok = abs(t["amount"] - x["amount"]) <= tol and t["priority"] == x["priority"] and t["doa_level"] == x["doa"]
+            rows.append(self.row(tag + " amount · priority · DoA", "%s · %s · DoA %s" % (fmt_money(x["amount"]), x["priority"], x["doa"]), got, ok))
+            if "before" in x:
+                w = "%s %s → %s" % (x["action"], fmt_money(x["before"]), fmt_money(x["after"]))
+                g = "%s %s → %s" % (ex.get("action"), fmt_money(ex.get("before", 0)), fmt_money(ex.get("after", 0)))
+                rows.append(self.row(tag + " bill before → after", w, g, ex.get("action") == x["action"] and abs(ex["before"] - x["before"]) <= tol and abs(ex["after"] - x["after"]) <= tol))
+            if "bills" in x:
+                rows.append(self.row(tag + " bills", ", ".join(x["bills"]), ", ".join(ex.get("bill_ids", [])), sorted(ex.get("bill_ids", [])) == sorted(x["bills"])))
+            if "fixed_retained" in x:
+                rows.append(self.row(tag + " fixed charges retained", fmt_money(x["fixed_retained"]), fmt_money(ex.get("fixed_retained", 0)), abs(ex.get("fixed_retained", 0) - x["fixed_retained"]) <= tol))
+            if x.get("via"):
+                rows.append(self.row(tag + " via %s (ID match in triage)" % x["via"], "%s, match pending" % x["via"], "%s, match %s" % (",".join(t["gates"]), (t.get("match") or {}).get("status")),
+                                     x["via"] in t["gates"] and (t.get("match") or {}).get("status") == "PENDING"))
+            if x.get("stop_effective"):
+                rows.append(self.row(tag + " stop SA effective", x["stop_effective"], ex.get("stop_effective"), ex.get("stop_effective") == x["stop_effective"]))
+            if x.get("flag_crm"):
+                rows.append(self.row(tag + " dispute / regulatory flag", ", ".join(x["flag_crm"]), ", ".join(t["flag"]) or "none", set(x["flag_crm"]) <= set(t["flag"])))
+        extra = sorted("%s:%s" % (code.get(t["account_id"], "background " + t["account_id"]), t["type"]) for t in tickets
+                       if (code.get(t["account_id"]), t["type"]) not in want)
+        rows.append(self.row("No unexpected tickets (incl. E4/E6, N1-N5, background)", "none", ", ".join(extra) or "none", not extra))
+        never = [c for c in exp.get("never_ticketed", []) if any(code.get(t["account_id"]) == c for t in tickets)]
+        rows.append(self.row("Never ticketed: " + ", ".join(exp.get("never_ticketed", [])), "none", ", ".join(never) or "none", not never))
         if "totals" in e:
             k = eng.kpis(ds_id, sc_id)
-            rows.append(self.row("$ prevented (pre-issue reductions)", fmt_money(e["totals"]["prevented"]), fmt_money(k["prevented_identified"]),
-                                 abs(k["prevented_identified"] - e["totals"]["prevented"]) <= tol))
-            rows.append(self.row("$ remediated (credits on issued bills)", fmt_money(e["totals"]["remediated"]), fmt_money(k["remediated_identified"]),
-                                 abs(k["remediated_identified"] - e["totals"]["remediated"]) <= tol))
+            rows.append(self.row("$ prevented", fmt_money(e["totals"]["prevented"]), fmt_money(k["prevented_identified"]), abs(k["prevented_identified"] - e["totals"]["prevented"]) <= tol))
+            rows.append(self.row("$ remediated", fmt_money(e["totals"]["remediated"]), fmt_money(k["remediated_identified"]), abs(k["remediated_identified"] - e["totals"]["remediated"]) <= tol))
+        if "register" in e:
+            reg = st["register"]
+            want_sig = {r["signature"]: sorted(r["cases"]) for r in e["register"]}
+            got_sig = {s: sorted(code.get(a, a) for a in v["accounts"]) for s, v in reg.items()}
+            rows.append(self.row("Root-cause register (%d signatures)" % len(want_sig), "; ".join("%s: %s" % (s, ",".join(c)) for s, c in sorted(want_sig.items())),
+                                 "; ".join("%s: %s" % (s, ",".join(c)) for s, c in sorted(got_sig.items())) or "empty", want_sig == got_sig))
+        for c in e.get("send_disabled", []):
+            cand = next((r for r in eng.backscan_candidates(ds_id, sc_id) if code.get(r["account_id"]) == c), None)
+            try:
+                eng.send_backscan("u.billops", ds_id, sc_id, [cand["wo_id"]]) if cand else None
+                res = "sent" if cand else "no row"
+            except AppError as ex:
+                res = "refused: %s" % ex
+            rows.append(self.row("%s 'Send to workflow' disabled" % c, "refused: Out of scope – revenue protection", res, res.startswith("refused") and "revenue protection" in res))
         dts = e.get("drive_to_state")
         if dts:
-            k = find(dts["case_type"], dts["case"])
-            state = self.drive(eng, ds_id, sc_id, k["case_id"], stop_at=dts["state"]) if k else "no case"
-            rows.append(self.row("%s %s routes to %s" % (dts["case"], dts["case_type"], dts["state"]), dts["state"], state, state == dts["state"]))
+            t = self.find(eng, ds, ds_id, sc_id, dts["case"], dts["type"])
+            state = self.drive(eng, ds_id, sc_id, t["ticket_id"], stop_at=dts["state"]) if t else "no ticket"
+            rows.append(self.row("%s %s passes through %s" % (dts["case"], dts["type"], dts["state"]), dts["state"], state, state == dts["state"]))
         return rows
 
-    def drive(self, eng, ds_id, sc_id, case_id, stop_at=None):
-        for _ in range(25):
-            c = eng._case(ds_id, sc_id, case_id)
-            s = c["state"]
-            if s == stop_at or s in TERMINAL:
-                return s
-            if s == "MASTER_DATA_REVIEW":
-                eng.act("u.mdata", ds_id, sc_id, case_id, "CONFIRM_MATCH", {"reason": "Look-alike O/0; reads corroborate"})
-            elif s in DRI_STATES:
-                eng.act("u.dri", ds_id, sc_id, case_id, "DECIDE", {"option_id": c["investigation"]["recommended_option"]})
-            elif s == "FIELD_VERIFICATION":
-                eng.act("u.field", ds_id, sc_id, case_id, "FIELD_OUTCOME", {"outcome": "SUSPECTED_TAMPER", "reason": "Meter seal broken"})
-            elif s == "FINANCE_APPROVAL":
-                eng.act("u.finance", ds_id, sc_id, case_id, "FINANCE_APPROVE", {})
-            elif s == "PLAN_APPROVAL":
-                eng.act("u.dri", ds_id, sc_id, case_id, "APPROVE_PLAN", {})
-            elif s == "REGULATORY_REVIEW":
-                eng.act("u.reg", ds_id, sc_id, case_id, "APPROVE_COMMS", {})
-            elif s == "READY_TO_RELEASE":
-                eng.release("u.billops", ds_id, sc_id, [c["draft_bill_id"]])
-            else:
-                return s
-        return eng._case(ds_id, sc_id, case_id)["state"]
+    def drive(self, eng, ds_id, sc_id, tid, stop_at=None):
+        _AP.on = True
+        try:
+            for _ in range(30):
+                t = eng._ticket(ds_id, sc_id, tid)
+                if t["state"] == stop_at or t["state"] in DONE_STATES:
+                    return t["state"]
+                if not eng._autopilot_step(ds_id, sc_id, t):
+                    return t["state"]
+            return eng._ticket(ds_id, sc_id, tid)["state"]
+        finally:
+            _AP.on = False
 
-    # ---- investigations -------------------------------------------------------------------------
+    # ---- investigations -----------------------------------------------------------------------
     def check_investigations(self, exp, runs):
         rows = []
         spec = exp["investigations"]
         ds_id = spec["dataset"]
         ds = self.registry.get(ds_id)
-        conf = {}
         for r in spec["rows"]:
             eng = runs.get((ds_id, r["scenario"]))
-            k = next((c for c in eng.store.get(ds_id, r["scenario"])["cases"].values()
-                      if c["case_type"] == r["case_type"] and ds.case_codes.get(c["account_id"]) == r["case"]), None) if eng else None
-            inv = (k or {}).get("investigation") or {}
+            t = self.find(eng, ds, ds_id, r["scenario"], r["case"], r["type"]) if eng else None
+            inv = (t or {}).get("investigation") or {}
             tag = "%s %s" % (r["scenario"], r["case"])
             if not inv:
-                rows.append(self.row(tag + " investigation", "completed", (k or {}).get("investigation_error") or "missing", False))
+                rows.append(self.row(tag + " investigation", "completed", (t or {}).get("investigation_error") or "missing", False))
                 continue
-            conf[(r["case"], r["scenario"])] = inv["confidence"]
             rows.append(self.row(tag + " probable_cause", r["probable_cause"], inv["probable_cause"], inv["probable_cause"] == r["probable_cause"]))
-            rows.append(self.row(tag + " recommended_option", r["label"], inv.get("recommended_label") + " [%s]" % inv["recommended_option"]
-                                 + (" stop %s" % k["expected"].get("stop_effective") if k["case_type"] == "ADVANCE" else ""),
-                                 inv["recommended_option"] == r["recommended_option"] and (not r.get("stop_effective") or k["expected"].get("stop_effective") == r["stop_effective"])))
+            rows.append(self.row(tag + " recommended_option", r["label"], "%s [%s]" % (inv.get("recommended_label"), inv["recommended_option"]),
+                                 inv["recommended_option"] == r["recommended_option"] and (not r.get("stop_effective") or r["stop_effective"] in inv.get("recommended_label", ""))))
             cited = [e["record_id"] for e in inv["evidence"]]
             miss = [x for x in r["must_cite"] if x not in cited]
             rows.append(self.row(tag + " must cite", ", ".join(r["must_cite"]), "missing " + ", ".join(miss) if miss else "all cited (%d claims)" % len(cited), not miss))
-            if r.get("must_not_cite"):
-                bad = [x for x in r["must_not_cite"] if x in cited]
-                rows.append(self.row(tag + " must not cite", ", ".join(r["must_not_cite"]), ", ".join(bad) or "not cited", not bad))
             if r.get("corroborating_read_date"):
                 reads = {x["read_id"]: x for x in ds.tables[F_READ]}
                 dates = [reads[e["record_id"]]["read_date"] for e in inv["evidence"] if e["file"] == F_READ and "orroborat" in e["claim"] and e["record_id"] in reads]
-                rows.append(self.row(tag + " match corroborated by estimated reads", "from " + r["corroborating_read_date"], ", ".join(dates) or "no corroboration",
-                                     r["corroborating_read_date"] in dates))
+                rows.append(self.row(tag + " match corroborated by estimates", "from " + r["corroborating_read_date"], ", ".join(dates) or "none", r["corroborating_read_date"] in dates))
             for mid, stv in (r.get("msg_status_at_scenario") or {}).items():
                 claim = next((e["claim"] for e in inv["evidence"] if e["record_id"] == mid), "")
                 rows.append(self.row(tag + " %s status at scenario time" % mid, stv, claim or "not cited", stv in claim))
-        ch = spec.get("confidence_higher")
-        if ch:
-            hi, lo = conf.get((ch["case"], ch["higher"])), conf.get((ch["case"], ch["lower"]))
-            rows.append(self.row("%s confidence %s > %s" % (ch["case"], ch["higher"], ch["lower"]), "higher", "%s vs %s" % (hi, lo),
-                                 hi is not None and lo is not None and hi > lo))
         return rows
 
     def check_no_future(self, runs):
@@ -3175,8 +3615,8 @@ class SelfTest:
             ds = self.registry.get(ds_id)
             T = eng.scenario(ds_id, sc_id)["scenario_time"]
             bad, n = [], 0
-            for c in eng.store.get(ds_id, sc_id)["cases"].values():
-                for e in (c.get("investigation") or {}).get("evidence", []):
+            for t in eng.store.get(ds_id, sc_id)["tickets"].values():
+                for e in (t.get("investigation") or {}).get("evidence", []):
                     n += 1
                     kf = KEY_FIELD.get(e["file"])
                     rec = next((r for r in ds.tables.get(e["file"], []) if r.get(kf) == e["record_id"]), None)
@@ -3193,164 +3633,140 @@ class SelfTest:
             rows.append(self.row("%s %s" % (ds.name, sc_id), "no record after %s" % T, ", ".join(bad) or "%d citations OK" % n, not bad))
         return rows
 
-    # ---- end to end ---------------------------------------------------------------------------
-    def e2e_run(self):
-        ds_id, sc_id = "dataset_A_with_errors", "RUN_2026-11-02"
+    # ---- autopilot end to end + determinism --------------------------------------------------
+    def ap_run(self, ds_id, sc_id):
         eng = self.engine()
-        eng.run_gate("u.billops", ds_id, sc_id)                                    # 1. Billing Ops runs the gate (2. agents investigate)
-        st = eng.store.get(ds_id, sc_id)
-        for _ in range(30):
-            pending = [c for c in st["cases"].values() if c["state"] not in TERMINAL]
-            if not pending:
-                break
-            progressed = False
-            # 3. steward confirms, 4. DRI decides, field records, 5. Finance approves, 6. DRI approves plans (7-8 agents run), 9. release
-            for owner in ("MASTER_DATA", "DRI", "FIELD_OPS", "FINANCE", "REGULATORY", "BILLING_OPS"):
-                for c in list(st["cases"].values()):
-                    if STATE_OWNER.get(c["state"]) == owner and c["state"] not in TERMINAL:
-                        before = c["state"]
-                        self.drive_one(eng, ds_id, sc_id, c)
-                        progressed = progressed or c["state"] != before
-            if not progressed:
-                break
-        eng.release("u.billops", ds_id, sc_id, all_passed=True)                   # 9. release passed bills too
-        return eng, ds_id, sc_id
+        eng.autopilot(ds_id, sc_id)
+        return eng
 
-    def drive_one(self, eng, ds_id, sc_id, c):
-        s, cid = c["state"], c["case_id"]
-        if s == "MASTER_DATA_REVIEW":
-            eng.act("u.mdata", ds_id, sc_id, cid, "CONFIRM_MATCH", {"reason": "O/0 look-alike; reads corroborate"})
-        elif s in DRI_STATES:
-            eng.act("u.dri", ds_id, sc_id, cid, "DECIDE", {"option_id": c["investigation"]["recommended_option"]})
-        elif s == "FIELD_VERIFICATION":
-            eng.act("u.field", ds_id, sc_id, cid, "FIELD_OUTCOME", {"outcome": "SUSPECTED_TAMPER", "reason": "Seal broken"})
-        elif s == "FINANCE_APPROVAL":
-            eng.act("u.finance", ds_id, sc_id, cid, "FINANCE_APPROVE", {})
-        elif s == "PLAN_APPROVAL" and c.get("plan"):
-            eng.act("u.dri", ds_id, sc_id, cid, "APPROVE_PLAN", {})
-        elif s == "REGULATORY_REVIEW":
-            eng.act("u.reg", ds_id, sc_id, cid, "APPROVE_COMMS", {})
-        elif s == "READY_TO_RELEASE":
-            eng.release("u.billops", ds_id, sc_id, [c["draft_bill_id"]])
-
-    def check_e2e(self):
+    def check_autopilot(self, exp):
         rows = []
-        try:
-            eng, ds_id, sc_id = self.e2e_run()
-        except Exception as ex:
-            return [self.row("end-to-end run", "completes", "%s: %s" % (type(ex).__name__, ex), False, traceback.format_exc()[-800:])]
+        ap = exp["autopilot"]
+        ds_id, sc_id = ap["dataset"], ap["scenario"]
         ds = self.registry.get(ds_id)
+        eng = self.ap_run(ds_id, sc_id)
         st = eng.store.get(ds_id, sc_id)
-        cases = list(st["cases"].values())
-        not_res = ["%s %s" % (c["case_id"], c["state"]) for c in cases if c["state"] != "RESOLVED"]
-        rows.append(self.row("All %d cases RESOLVED" % len(cases), "RESOLVED", ", ".join(not_res) or "all RESOLVED", not not_res))
-        evs = eng.audit.events
-        wrong = []
-        for e in evs:
-            want = ROLE_OF_ACTION.get(e["action"])
-            if want and e["actor_role"] != want:
-                wrong.append("%s by %s" % (e["action"], e["actor_role"]))
-            wa = ACTOR_OF_ACTION.get(e["action"])
-            if wa and e["actor_id"] not in wa:
-                wrong.append("%s by %s" % (e["action"], e["actor_id"]))
-            if e["action"] == "COMMS_APPROVED" and e["actor_role"] not in ("DRI", "REGULATORY"):
-                wrong.append("COMMS_APPROVED by %s" % e["actor_role"])
-        rows.append(self.row("Every step performed by its owning role / actor", "yes", ", ".join(wrong) or "yes", not wrong))
-        chain_missing = []
-        for c in cases:
-            acts = {e["action"] for e in evs if e.get("case_id") == c["case_id"]}
-            need = {"CASE_CREATED", "AGENT_TOOL_CALL", "INVESTIGATION_COMPLETED", "ROUTED", "DECISION_RECORDED", "PLAN_PROPOSED",
-                    "PLAN_APPROVED", "STEP_EXECUTED", "VERIFICATION_PASSED", "CASE_CLOSED"}
-            if c["case_type"] == "PREVENT":
-                need.add("BILL_RELEASED")
-            if c["requires_master_data"]:
-                need.add("MATCH_CONFIRMED")
-            if c["case_type"] == "REMEDIATE" or c["expected"].get("reduction", 0) >= self.cfg.app().get("finance_threshold", 1000):
-                need.add("FINANCE_APPROVED")
-            if c["case_type"] == "REVENUE_PROTECTION":
-                need.add("FIELD_OUTCOME_RECORDED")
-            miss = need - acts
-            if miss:
-                chain_missing.append("%s: %s" % (c["case_id"], ",".join(sorted(miss))))
-        rows.append(self.row("Complete who/what/when chain per case in the audit log", "complete", "; ".join(chain_missing) or "complete for %d cases" % len(cases), not chain_missing))
-        fin = sorted("%s:%s" % (ds.case_codes.get(c["account_id"]), c["case_type"]) for c in cases if c.get("finance"))
-        rows.append(self.row("Finance approval only where required", "E1:PREVENT + REMEDIATE cases", ", ".join(fin),
-                             all(x.endswith("REMEDIATE") or x == "E1:PREVENT" for x in fin) and "E1:PREVENT" in fin))
-        v = eng.view(ds_id, sc_id, sandbox=True)
+        for x in exp["datasets"][ds_id][sc_id]["tickets"]:
+            t = self.find(eng, ds, ds_id, sc_id, x["case"], x["type"])
+            rows.append(self.row("%s %s closure" % (x["case"], x["type"]), "RESOLVED · %s" % x["closure"],
+                                 "%s · %s" % (t["state"], t["closure_code"]) if t else "missing", bool(t) and t["state"] == "RESOLVED" and t["closure_code"] == x["closure"]))
+        wf = {tr["id"]: tr for tr in self.cfg.workflow()["transitions"]}
         bad = []
-        for c in cases:
-            if c["case_type"] != "PREVENT":
-                continue
-            rel = st["bills"][c["draft_bill_id"]]["release"] or {}
-            want = c["expected"]["after"]
-            if rel.get("amount") is None or abs(rel["amount"] - want) > 0.01 + 1e-9:
-                bad.append("%s released %s, expected %s" % (c["draft_bill_id"], rel.get("amount"), want))
-        rows.append(self.row("Released corrected bills equal the calculator's 'after' amounts", "equal", "; ".join(bad) or "equal", not bad))
-        unreleased = [b for b, x in st["bills"].items() if not x["released"]]
-        rows.append(self.row("Every draft bill in the run released", "all released", ", ".join(unreleased) or "all %d released" % len(st["bills"]), not unreleased))
+        for t in st["tickets"].values():
+            for h in t["history"][1:]:
+                tr = wf.get(h["transition"])
+                who = h["by"]
+                persona = (self.cfg.user(who) or {}).get("persona")
+                if not tr or not (who in tr.get("actors", []) or persona in tr.get("personas", [])):
+                    bad.append("%s %s by %s" % (t["ticket_id"], h.get("transition"), who))
+        rows.append(self.row("Every transition made by the persona / actor the rules allow", "all allowed", ", ".join(bad) or "all %d allowed" % sum(len(t["history"]) - 1 for t in st["tickets"].values()), not bad))
+        digest = sorted(ds.case_codes.get(t["account_id"]) for t in st["tickets"].values() if (t.get("decision") or {}).get("level") == "L0")
+        reviewed = all(t.get("digest") for t in st["tickets"].values() if (t.get("decision") or {}).get("level") == "L0")
+        rows.append(self.row("Daniel's digest (L0) contains", ", ".join(ap["digest"]), ", ".join(digest) + (" (all reviewed)" if reviewed else " (not reviewed)"), digest == sorted(ap["digest"]) and reviewed))
+        fin = sorted([ds.case_codes.get(e_t["account_id"]), e_t["type"]] for e_t in st["tickets"].values() if (e_t.get("finance") or {}).get("by") == "u.finance")
+        rows.append(self.row("Aisha approved exactly", "; ".join("%s %s" % tuple(x) for x in ap["finance_approved"]), "; ".join("%s %s" % tuple(x) for x in fin), fin == sorted(ap["finance_approved"])))
+        user_evs = [e for e in eng.audit.events if e["actor_type"] == "USER" and e["action"] not in ("SIGN_IN",)]
+        rows.append(self.row("Autopilot events logged as the persona with autopilot = true", "all flagged", "%d of %d flagged" % (sum(1 for e in user_evs if e["autopilot"]), len(user_evs)),
+                             user_evs and all(e["autopilot"] and e["reason"] for e in user_evs)))
+        unrel = [b for b, x in st["bills"].items() if not x["released"]]
+        rows.append(self.row("Every draft bill in the run released", "all", ", ".join(unrel) or "all %d" % len(st["bills"]), not unrel))
         ver = eng.audit.verify()
         rows.append(self.row("Verify integrity (hash chain)", "no breaks", "OK, %d events" % ver["events"] if ver["ok"] else ver["first_broken"], ver["ok"]))
-        # determinism: same scenario twice -> identical agent outputs and plans (apart from timestamps)
-        eng2, _, _ = self.e2e_run()
+        eng2 = self.ap_run(ds_id, sc_id)
 
         def sig(e):
-            out = {}
-            for c in e.store.get(ds_id, sc_id)["cases"].values():
-                plan = c.get("plan") or {}
-                out[c["case_id"]] = {"investigation": c.get("investigation"), "state": c["state"],
-                                     "plan": [{k: s.get(k) for k in ("seq", "step", "params", "check", "status", "result", "check_result")} for s in plan.get("steps", [])],
-                                     "overlays": None}
-            out["_overlays"] = [{k: o[k] for k in ("file", "key", "row", "case_id", "step")} for o in e.store.get(ds_id, sc_id)["overlays"]]
+            s = e.store.get(ds_id, sc_id)
+            out = {tid: {"investigation": t.get("investigation"), "state": t["state"], "closure": t["closure_code"], "priority": t["priority"],
+                         "plan": [{k: x.get(k) for k in ("seq", "step", "params", "check", "status", "result", "check_result")} for x in (t.get("plan") or {}).get("steps", [])]}
+                   for tid, t in s["tickets"].items()}
+            out["_overlays"] = [{k: o[k] for k in ("file", "key", "row", "case_id", "step")} for o in s["overlays"]]
             return canon(out)
         same = sig(eng) == sig(eng2)
-        rows.append(self.row("Same scenario run twice: identical agent outputs, plans and sandbox", "identical", "identical" if same else "DIFFERENT", same))
+        rows.append(self.row("Same scenario twice: identical agent outputs, plans and sandbox", "identical", "identical" if same else "DIFFERENT", same))
+        return rows
+
+    # ---- SoD -----------------------------------------------------------------------------------
+    def expect_denied(self, rows, eng, label, fn):
+        n0 = len(eng.audit.events)
+        try:
+            fn()
+            res = "ALLOWED"
+        except PermissionDenied as ex:
+            res = "denied"
+        except AppError as ex:
+            res = "refused (%s)" % ex
+        logged = any(e["action"] == "PERMISSION_DENIED" for e in eng.audit.events[n0:])
+        rows.append(self.row(label, "403 + PERMISSION_DENIED", "%s%s" % (res, " + logged" if logged else ""), res == "denied" and logged))
+
+    def check_sod(self):
+        rows = []
+        ds_id, sc_id = "dataset_A_with_errors", "RUN_2026-11-02"
+        ds = self.registry.get(ds_id)
+        eng = self.engine()
+        eng.run_gate("u.billops", ds_id, sc_id)
+        f = lambda c, ty: self.find(eng, ds, ds_id, sc_id, c, ty)
+        e1, e2, e5 = f("E1", "PREVENT"), f("E2", "PREVENT"), f("E5", "PREVENT")
+        self.expect_denied(rows, eng, "Finance cannot triage (acts only on PENDING_FINANCE)", lambda: eng.act("u.finance", ds_id, sc_id, e1["ticket_id"], "CONFIRM_TRIAGE", {}))
+        for t in (e1, e2):
+            eng.act("u.billops", ds_id, sc_id, t["ticket_id"], "CONFIRM_TRIAGE", {})
+        self.expect_denied(rows, eng, "Finance cannot decide (SoD-4)", lambda: eng.act("u.finance", ds_id, sc_id, e1["ticket_id"], "DECIDE", {"option_id": "CORRECT_AND_REBILL"}))
+        self.expect_denied(rows, eng, "Analyst cannot decide above L0 (E2 is L1)", lambda: eng.act("u.billops", ds_id, sc_id, e2["ticket_id"], "DECIDE", {"option_id": "CORRECT_AND_REBILL"}))
+        eng.act("u.dri", ds_id, sc_id, e1["ticket_id"], "DECIDE", {"option_id": "CORRECT_AND_REBILL"})
+        rows.append(self.row("E1 (L2) decision routes to Finance", "PENDING_FINANCE", e1["state"], e1["state"] == "PENDING_FINANCE"))
+        self.expect_denied(rows, eng, "DRI cannot approve the financial impact (SoD-4)", lambda: eng.act("u.dri", ds_id, sc_id, e1["ticket_id"], "FINANCE_APPROVE", {}))
+        self.expect_denied(rows, eng, "DRI cannot release bills (SoD-3)", lambda: eng.release("u.dri", ds_id, sc_id, all_passed=True))
+        self.expect_denied(rows, eng, "Finance cannot release bills (SoD-3)", lambda: eng.release("u.finance", ds_id, sc_id, all_passed=True))
+        eng.act("u.billops", ds_id, sc_id, e5["ticket_id"], "CONFIRM_TRIAGE", {"decide": True})
+        rows.append(self.row("E5 (L0): the Analyst decides alone and the plan is proposed", "PLAN_APPROVAL by u.billops", "%s by %s" % (e5["state"], (e5.get("decision") or {}).get("by")),
+                             e5["state"] == "PLAN_APPROVAL" and e5["decision"]["by"] == "u.billops" and bool(e5.get("plan"))))
+        self.expect_denied(rows, eng, "Plan approver must be the decision-maker (DRI on Maya's L0 plan)", lambda: eng.act("u.dri", ds_id, sc_id, e5["ticket_id"], "APPROVE_PLAN", {}))
+        e2["triage"]["by"] = "u.dri"          # synthetic: same person proposed and would approve
+        self.expect_denied(rows, eng, "Nobody approves their own proposal outside L0 (SoD-2)", lambda: eng.act("u.dri", ds_id, sc_id, e2["ticket_id"], "DECIDE", {"option_id": "CORRECT_AND_REBILL"}))
+        e2["triage"]["by"] = "u.billops"
+        try:
+            eng._transition(ds_id, sc_id, e5, "IN_PROGRESS", "agent.executor", "PLAN_APPROVED")
+            res = "ALLOWED"
+        except PermissionDenied:
+            res = "denied"
+        rows.append(self.row("Agents can never approve (SoD-1)", "denied", res, res == "denied"))
+        try:
+            eng._transition(ds_id, sc_id, e2, "RESOLVED", "u.dri", "TICKET_CLOSED")
+            res = "ALLOWED"
+        except AppError as ex:
+            res = "refused: %s" % ex
+        rows.append(self.row("Transition not in workflow.json is refused", "refused", res, res.startswith("refused") and "not in the workflow table" in res))
+        try:
+            eng.act("u.dri", ds_id, sc_id, e2["ticket_id"], "DECIDE", {"option_id": "RELEASE_AS_IS"})
+            res = "accepted"
+        except AppError as ex:
+            res = "refused: %s" % ex
+        rows.append(self.row("Override without a reason is refused (SoD-5)", "refused", res, res.startswith("refused")))
+        self.expect_denied(rows, eng, "Analyst cannot export the root-cause register (DRI only)", lambda: eng.export_register("u.billops", ds_id, sc_id))
+        ver = eng.audit.verify()
+        rows.append(self.row("Audit chain intact after SoD tests", "no breaks", "OK" if ver["ok"] else ver["first_broken"], ver["ok"]))
         return rows
 
     # ---- guardrails ----------------------------------------------------------------------------
     def check_guardrails(self):
         rows = []
         ds_id, sc_id = "dataset_A_with_errors", "RUN_2026-11-02"
+        ds = self.registry.get(ds_id)
         eng = self.engine()
         eng.run_gate("u.billops", ds_id, sc_id)
-        ds = self.registry.get(ds_id)
-        st = eng.store.get(ds_id, sc_id)
-        e1 = next(c for c in st["cases"].values() if ds.case_codes.get(c["account_id"]) == "E1" and c["case_type"] == "PREVENT")
-        e5 = next(c for c in st["cases"].values() if ds.case_codes.get(c["account_id"]) == "E5" and c["case_type"] == "PREVENT")
-        # permission enforcement
-        n0 = len(eng.audit.events)
-        try:
-            eng.act("u.field", ds_id, sc_id, e1["case_id"], "FINANCE_APPROVE", {})
-            denied = False
-        except PermissionDenied:
-            denied = True
-        logged = any(e["action"] == "PERMISSION_DENIED" for e in eng.audit.events[n0:])
-        rows.append(self.row("Field Ops cannot approve finance (403 + PERMISSION_DENIED logged)", "denied + logged", "%s + %s" % ("denied" if denied else "ALLOWED", "logged" if logged else "not logged"), denied and logged))
-        try:
-            eng.run_gate("u.audit", ds_id, sc_id)
-            ok = False
-        except PermissionDenied:
-            ok = True
-        except AppError:
-            ok = False
-        rows.append(self.row("Auditor cannot run the gate", "denied", "denied" if ok else "allowed", ok))
-        # point-in-time inside the tools
-        ctx = ToolContext(eng, ds_id, sc_id, e1["case_id"])
+        e1, e5 = self.find(eng, ds, ds_id, sc_id, "E1", "PREVENT"), self.find(eng, ds, ds_id, sc_id, "E5", "PREVENT")
+        ctx = ToolContext(eng, ds_id, sc_id, e1["ticket_id"])
         crm, _ = t_get_crm_cases(ctx, {"account_id": e1["account_id"]})
         ids = [c["case_id"] for c in crm["cases"]]
-        rows.append(self.row("get_crm_cases hides cases opened after scenario time", "CASE-300276/300287 hidden", ", ".join(ids),
-                             "CASE-300276" not in ids and "CASE-300287" not in ids))
-        ctx5 = ToolContext(eng, ds_id, sc_id, e5["case_id"])
-        msgs, _ = t_get_integration_messages(ctx5, {"wo_id": e5["root_wo_id"]})
+        rows.append(self.row("Tools hide CRM cases opened after scenario time", "CASE-300276/300287 hidden", ", ".join(ids), "CASE-300276" not in ids and "CASE-300287" not in ids))
+        msgs, _ = t_get_integration_messages(ToolContext(eng, ds_id, sc_id, e5["ticket_id"]), {"wo_id": e5["root_wo_id"]})
         stt = msgs["messages"][0]["status"] if msgs["messages"] else "none"
-        rows.append(self.row("Message processed after scenario time shows as UNPROCESSED", "UNPROCESSED", stt, stt == "UNPROCESSED"))
-        # investigator cannot use step tools
-        inv_runner = AgentRunner(eng, ds_id, sc_id, e1["case_id"], "agent.investigator", INVESTIGATOR_PROMPT, READ_TOOLS + DETERMINISTIC_TOOLS, 0)
+        rows.append(self.row("A message processed after scenario time shows UNPROCESSED", "UNPROCESSED", stt, stt == "UNPROCESSED"))
+        inv_runner = AgentRunner(eng, ds_id, sc_id, e1["ticket_id"], "agent.investigator", INVESTIGATOR_PROMPT, READ_TOOLS + DETERMINISTIC_TOOLS, 0)
         out = eng.execute_tool(ctx, inv_runner, {"id": "t1", "name": "STOP_SA", "input": {"sa_id": e1["sa_id"], "effective_date": e1["disconnect_date"]}})
-        rows.append(self.row("Investigation agent cannot call sandbox step tools", "rejected", out.get("error", "EXECUTED"), "error" in out))
-        # citation / money guardrails on a real investigation output
+        rows.append(self.row("Investigation agent cannot call step tools", "rejected", out.get("error", "EXECUTED"), "error" in out))
         inv = copy.deepcopy(e1["investigation"])
-        fake_runner = AgentRunner(eng, ds_id, sc_id, e1["case_id"], "agent.investigator", INVESTIGATOR_PROMPT, READ_TOOLS, 0)
-        fake_runner.log = [("calculate_correction", {}, {"options": [{"option_id": o["option_id"], "impact": o["expected_financial_impact"]} for o in inv["options"]]})]
+        fake = AgentRunner(eng, ds_id, sc_id, e1["ticket_id"], "agent.investigator", INVESTIGATOR_PROMPT, READ_TOOLS, 0)
+        fake.log = [("calculate_correction", {}, {"options": [{"option_id": o["option_id"], "impact": o["expected_financial_impact"]} for o in inv["options"]]})]
         view = eng.view(ds_id, sc_id, sandbox=True)
         for label, mutate in (("unknown record WO-999999", lambda d: d["evidence"].append({"claim": "x", "system": "OMS", "file": F_WO, "record_id": "WO-999999"})),
                               ("future record CASE-300276", lambda d: d["evidence"].append({"claim": "x", "system": "CRM", "file": F_CRM, "record_id": "CASE-300276"})),
@@ -3358,21 +3774,19 @@ class SelfTest:
             bad = copy.deepcopy(inv)
             mutate(bad)
             try:
-                validate_investigation(view, bad, fake_runner)
+                validate_investigation(view, bad, fake)
                 res = "accepted"
             except AgentError as ex:
                 res = "rejected (%s)" % ex
             rows.append(self.row("Validator rejects " + label, "rejected", res, res.startswith("rejected")))
-        # tool budget
-        r = AgentRunner(eng, ds_id, sc_id, e1["case_id"], "agent.investigator", INVESTIGATOR_PROMPT, READ_TOOLS, 0, max_calls=12)
+        r = AgentRunner(eng, ds_id, sc_id, e1["ticket_id"], "agent.investigator", INVESTIGATOR_PROMPT, READ_TOOLS, 0, max_calls=12)
         try:
-            r.run({"case_id": e1["case_id"]}, _LoopingLLM())
+            r.run({"case_id": e1["ticket_id"]}, _LoopingLLM())
             res = "not enforced"
         except AgentError as ex:
-            res = "stopped after %d calls (%s)" % (r.calls, ex)
-        rows.append(self.row("Maximum 12 tool calls per run", "stopped at 12", res, r.calls == 12 and res.startswith("stopped")))
-        # execution: only the next approved step; injected failure returns to DRI
-        eng.act("u.dri", ds_id, sc_id, e5["case_id"], "DECIDE", {"option_id": "PROCESS_STOP_THEN_FINAL"})
+            res = "stopped after %d calls" % r.calls
+        rows.append(self.row("Maximum 12 tool calls per run", "stopped after 12 calls", res, r.calls == 12))
+        eng.act("u.billops", ds_id, sc_id, e5["ticket_id"], "CONFIRM_TRIAGE", {"decide": True})
         plan = [{"seq": s["seq"], "step": s["step"], "params": s["params"]} for s in e5["plan"]["steps"]]
         g = ExecGuard(plan)
         try:
@@ -3381,39 +3795,90 @@ class SelfTest:
         except ToolError as ex:
             res = "rejected (%s)" % ex
         rows.append(self.row("Execution agent cannot skip ahead in the plan", "rejected", res, res.startswith("rejected")))
-        ex_runner = AgentRunner(eng, ds_id, sc_id, e5["case_id"], "agent.executor", EXECUTOR_PROMPT, STEP_TOOLS + ("check_step",), 0, guard=ExecGuard(plan))
-        out = eng.execute_tool(ToolContext(eng, ds_id, sc_id, e5["case_id"]), ex_runner,
-                               {"id": "t2", "name": "CANCEL_DRAFT_BILL", "input": {"bill_id": e5["draft_bill_id"]}})
+        ex_runner = AgentRunner(eng, ds_id, sc_id, e5["ticket_id"], "agent.executor", EXECUTOR_PROMPT, STEP_TOOLS + ("check_step",), 0, guard=ExecGuard(plan))
+        out = eng.execute_tool(ToolContext(eng, ds_id, sc_id, e5["ticket_id"]), ex_runner, {"id": "t2", "name": "CANCEL_DRAFT_BILL", "input": {"bill_id": e5["draft_bill_id"]}})
         rows.append(self.row("Out-of-plan step via the agent loop is rejected", "rejected", out.get("error", "EXECUTED"), "error" in out))
-        bad_plan = {"case_id": e5["case_id"], "option_id": "PROCESS_STOP_THEN_FINAL",
+        bad_plan = {"case_id": e5["ticket_id"], "option_id": "PROCESS_STOP_THEN_FINAL",
                     "steps": [{"seq": 1, "step": "CREATE_CREDIT_MEMO", "params": {"account_id": e5["account_id"], "amount": 999, "gl_period": "2026-11"}, "check": "x"}]}
-        res, _ = eng._submit_plan(ToolContext(eng, ds_id, sc_id, e5["case_id"]), bad_plan)
+        res, _ = eng._submit_plan(ToolContext(eng, ds_id, sc_id, e5["ticket_id"]), bad_plan)
         rows.append(self.row("Server rejects a plan step outside the approved playbook", "rejected", res.get("error", "accepted"), not res.get("accepted")))
-        eng.set_inject_failure("u.dri", ds_id, sc_id, True)
-        eng.act("u.dri", ds_id, sc_id, e5["case_id"], "APPROVE_PLAN", {})
-        c5 = eng._case(ds_id, sc_id, e5["case_id"])
-        failed = any(e["action"] == "STEP_FAILED" and e["case_id"] == e5["case_id"] for e in eng.audit.events)
-        rows.append(self.row("Injected failure returns the case to the DRI", "RETURNED_TO_DRI + STEP_FAILED", "%s + %s" % (c5["state"], "STEP_FAILED" if failed else "no event"),
-                             c5["state"] == "RETURNED_TO_DRI" and failed))
-        # overlapping plans: two cases on the same work order planned before either executes (idempotent steps)
-        e3 = [c for c in st["cases"].values() if ds.case_codes.get(c["account_id"]) == "E3"]
-        for c in e3:
-            eng.act("u.mdata", ds_id, sc_id, c["case_id"], "CONFIRM_MATCH", {})
-            eng.act("u.dri", ds_id, sc_id, c["case_id"], "DECIDE", {"option_id": c["investigation"]["recommended_option"]})
-            if eng._case(ds_id, sc_id, c["case_id"])["state"] == "FINANCE_APPROVAL":
-                eng.act("u.finance", ds_id, sc_id, c["case_id"], "FINANCE_APPROVE", {})
-        both_planned = all(any(s["step"] == "CORRECT_PREMISE_REFERENCE" for s in eng._case(ds_id, sc_id, c["case_id"])["plan"]["steps"]) for c in e3)
-        for c in e3:
-            eng.act("u.dri", ds_id, sc_id, c["case_id"], "APPROVE_PLAN", {})
-        states = ["%s:%s" % (c["case_type"], eng._case(ds_id, sc_id, c["case_id"])["state"]) for c in e3]
-        rows.append(self.row("Overlapping plans on the same work order both complete (idempotent steps)", "both planned the premise fix; neither fails",
-                             "%s; %s" % ("both planned it" if both_planned else "only one planned it", ", ".join(states)),
-                             both_planned and all(s.endswith(("READY_TO_RELEASE", "RESOLVED")) for s in states)))
-        ver = eng.audit.verify()
-        rows.append(self.row("Audit chain intact after guardrail tests", "no breaks", "OK" if ver["ok"] else ver["first_broken"], ver["ok"]))
+        eng.set_inject_failure("u.billops", ds_id, sc_id, True)
+        eng.act("u.billops", ds_id, sc_id, e5["ticket_id"], "APPROVE_PLAN", {})
+        failed = any(e["action"] == "STEP_FAILED" and e["ticket_id"] == e5["ticket_id"] for e in eng.audit.events)
+        rows.append(self.row("Injected failure returns the ticket to the DRI", "AWAITING_DECISION, returned, assignee DRI + STEP_FAILED",
+                             "%s, returned=%s, assignee %s%s" % (e5["state"], e5["returned"], eng.assignee(e5), " + STEP_FAILED" if failed else ""),
+                             e5["state"] == "AWAITING_DECISION" and e5["returned"] and eng.assignee(e5) == "DRI" and failed))
+        e3p, e3r = self.find(eng, ds, ds_id, sc_id, "E3", "PREVENT"), self.find(eng, ds, ds_id, sc_id, "E3", "REMEDIATE")
+        for t in (e3p, e3r):
+            eng.act("u.billops", ds_id, sc_id, t["ticket_id"], "CONFIRM_MATCH", {"note": "look-alike O/0"})
+            eng.act("u.billops", ds_id, sc_id, t["ticket_id"], "CONFIRM_TRIAGE", {})
+            eng.act("u.dri", ds_id, sc_id, t["ticket_id"], "DECIDE", {"option_id": t["investigation"]["recommended_option"]})
+            if t["state"] == "PENDING_FINANCE":
+                eng.act("u.finance", ds_id, sc_id, t["ticket_id"], "FINANCE_APPROVE", {})
+        both = all(any(s["step"] == "CORRECT_PREMISE_REFERENCE" for s in t["plan"]["steps"]) for t in (e3p, e3r))
+        for t in (e3p, e3r):
+            eng.act("u.dri", ds_id, sc_id, t["ticket_id"], "APPROVE_PLAN", {})
+        sts = ["%s:%s" % (t["type"], t["state"]) for t in (e3p, e3r)]
+        rows.append(self.row("Overlapping plans on one work order both complete (idempotent steps)", "PREVENT:READY_TO_RELEASE, REMEDIATE:RESOLVED",
+                             ("both planned the premise fix; " if both else "") + ", ".join(sts), both and sts == ["PREVENT:READY_TO_RELEASE", "REMEDIATE:RESOLVED"]))
         return rows
 
-    # ---- POC 1 parity, CSV integrity ------------------------------------------------------------
+    # ---- SLA -----------------------------------------------------------------------------------
+    def check_sla(self):
+        rows = []
+        ds_id, sc_id = "dataset_A_with_errors", "RUN_2026-11-02"
+        ds = self.registry.get(ds_id)
+        eng = self.engine()
+        eng.run_gate("u.billops", ds_id, sc_id)
+        e1, e5 = self.find(eng, ds, ds_id, sc_id, "E1", "PREVENT"), self.find(eng, ds, ds_id, sc_id, "E5", "PREVENT")
+        e7 = self.find(eng, ds, ds_id, sc_id, "E7", "ADVANCE")
+        rows.append(self.row("E1 (P1) first action due 1 business hour after the gate", "2026-11-23T10:00:00", e1["sla"]["first_action"]["due"], e1["sla"]["first_action"]["due"] == "2026-11-23T10:00:00"))
+        rows.append(self.row("E5 held-bill deadline = run + 3 business days; auto-P1 one day before", "2026-11-26T09:00:00 / 2026-11-25T09:00:00",
+                             "%s / %s" % (e5["sla"]["held_deadline"], e5["sla"]["auto_p1_at"]), e5["sla"]["held_deadline"] == "2026-11-26T09:00:00" and e5["sla"]["auto_p1_at"] == "2026-11-25T09:00:00"))
+        rows.append(self.row("E7 ADVANCE due 2 business days before the next run (+30 days)", "2026-12-21T09:00:00", e7["sla"].get("advance_deadline"), e7["sla"].get("advance_deadline") == "2026-12-21T09:00:00"))
+
+        def evs(action, tid=None, since=0):
+            return [e for e in eng.audit.events[since:] if e["action"] == action and (tid is None or e["ticket_id"] == tid)]
+        n0 = len(eng.audit.events)
+        eng.advance_clock("u.dri", ds_id, sc_id, 0.8)
+        w = [e for e in evs("SLA_WARNING", e1["ticket_id"], n0) if e["after"]["clock"] == "first_action"]
+        rows.append(self.row("75% of E1's first-action SLA (48 min) -> SLA_WARNING to the assignee", "warning to BILLING_OPS", "%d warning(s)%s" % (len(w), " to " + w[0]["after"]["assignee"] if w else ""),
+                             len(w) == 1 and w[0]["after"]["assignee"] == "BILLING_OPS" and not evs("SLA_ESCALATED", e1["ticket_id"], n0)))
+        n1 = len(eng.audit.events)
+        eng.advance_clock("u.dri", ds_id, sc_id, 0.3)
+        x = [e for e in evs("SLA_ESCALATED", e1["ticket_id"], n1) if e["after"].get("clock") == "first_action"]
+        rows.append(self.row("100% of E1's first-action SLA -> SLA_ESCALATED to the DRI", "escalated to DRI", "%d escalation(s)%s" % (len(x), " to " + x[0]["after"]["escalated_to"] if x else ""),
+                             len(x) == 1 and x[0]["after"]["escalated_to"] == "DRI" and not x[0]["after"]["billing_manager_notified"]))
+        eng.act("u.billops", ds_id, sc_id, e1["ticket_id"], "CONFIRM_TRIAGE", {})
+        n2 = len(eng.audit.events)
+        eng.advance_clock("u.dri", ds_id, sc_id, 24)
+        m = [e for e in evs("SLA_ESCALATED", e1["ticket_id"], n2) if e["after"].get("clock") == "resolve"]
+        note = [x for x in eng.store.get(ds_id, sc_id)["notifications"] if x.get("manager") and x["ticket_id"] == e1["ticket_id"]]
+        rows.append(self.row("Breach while the DRI is the assignee -> Billing Manager notification (banner)", "manager notified", "%s; %d banner(s)" % ("escalated" if m else "no escalation", len(note)),
+                             bool(m) and m[0]["after"]["billing_manager_notified"] and bool(note)))
+        clk = evs("CLOCK_ADVANCED")
+        rows.append(self.row("Clock advances are audit-logged", "3 CLOCK_ADVANCED", len(clk), len(clk) == 3))
+        before = e5["priority"]
+        eng.advance_clock("u.dri", ds_id, sc_id, 24 + 15)
+        p1 = [e for e in evs("SLA_ESCALATED", e5["ticket_id"]) if (e["after"] or {}).get("rule") == "held-bill deadline"]
+        rows.append(self.row("Held bill: E5 becomes P1 one business day before its deadline", "%s -> P1 (logged)" % before, "%s -> %s%s" % (before, e5["priority"], " (logged)" if p1 else ""),
+                             e5["priority"] == "P1" and bool(p1)))
+        eng2 = self.engine()
+        eng2.autopilot(ds_id, sc_id)
+        st2 = eng2.store.get(ds_id, sc_id)
+        t5 = self.find(eng2, ds, ds_id, sc_id, "E5", "PREVENT")
+        t5["digest"] = None
+        eng2.clock.advance(26)
+        flagged = eng2.digest_flagged(t5)
+        rows.append(self.row("Unreviewed L0 item older than 1 business day is flagged in the digest", "flagged", "flagged" if flagged else "not flagged", flagged))
+        eng2.clock.advance(24 * 9)
+        eng2.tick()
+        closed = [t for t in st2["tickets"].values() if t["state"] == "CLOSED"]
+        rows.append(self.row("Tickets close automatically 5 business days after RESOLVED (closure code kept)", "all %d CLOSED" % len(st2["tickets"]),
+                             "%d CLOSED; codes kept: %s" % (len(closed), all(t["closure_code"] for t in closed)), len(closed) == len(st2["tickets"]) and all(t["closure_code"] for t in closed)))
+        return rows
+
+    # ---- POC 1 parity, CSV integrity ----------------------------------------------------------
     def check_poc1(self):
         rows = []
         for d in discover_datasets(self.data_dir):
@@ -3423,15 +3888,13 @@ class SelfTest:
             hdr = next((h for h in ds.headers[F_KEY] if re.match(r"^daily_check_\d{4}_\d{2}_\d{2}$", h)), None)
             as_of = hdr[12:].replace("_", "-") if hdr else "2026-11-02"
             res = poc1_detect(View(ds), as_of)
-            fails_b, fails_d = [], []
-            listed = set()
+            fails_b, fails_d, listed = [], [], set()
             for k in ds.tables[F_KEY]:
                 ids = ds.accounts_by_code.get(k["case"], [])
                 listed.update(ids)
                 f = next((x for x in res["back"]["findings"] if x["account_id"] in ids), None)
                 u = next((x for x in res["back"]["unmatched"] if x.get("account_id") in ids), None)
-                tot = num(k["credit_total"])
-                kind = k["back_scan_result"]
+                tot, kind = num(k["credit_total"]), k["back_scan_result"]
                 if kind == "FINDING" and not (f and f["severity"] == k["severity"] and abs(f["credit"] - tot) <= 0.01 + 1e-9):
                     fails_b.append(k["case"])
                 elif kind == "UNMATCHED" and not (u and not f and abs((u["exposure"] or 0) - tot) <= 0.01 + 1e-9):
@@ -3444,8 +3907,7 @@ class SelfTest:
                 if hdr and act != k[hdr]:
                     fails_d.append(k["case"])
             extra = [f["account_id"] for f in res["back"]["findings"] if f["account_id"] not in listed]
-            rows.append(self.row("%s back-scan vs answer_key" % ds.name, "all cases match, total %s" % fmt_money(sum(num(k["credit_total"]) for k in ds.tables[F_KEY] if k["back_scan_result"] == "FINDING")),
-                                 ("mismatch: " + ", ".join(fails_b + extra)) if fails_b or extra else "match, total %s" % fmt_money(res["back"]["total_credit"]), not fails_b and not extra))
+            rows.append(self.row("%s back-scan vs answer_key" % ds.name, "all cases match", ("mismatch: " + ", ".join(fails_b + extra)) if fails_b or extra else "match, total %s" % fmt_money(res["back"]["total_credit"]), not fails_b and not extra))
             rows.append(self.row("%s daily check %s vs answer_key" % (ds.name, as_of), "all cases match", ("mismatch: " + ", ".join(fails_d)) if fails_d else "match", not fails_d))
         return rows
 
@@ -3456,17 +3918,74 @@ class SelfTest:
 
 
 # =============================================================================================
-# SECTION 15 - HTTP API (permissions enforced server-side; 403 writes PERMISSION_DENIED)
+# SECTION 16 - HTTP API (every permission / SoD check is server-side; 403 writes PERMISSION_DENIED)
 # =============================================================================================
+VERSION_FILE = os.path.join(STATE_DIR, "VERSION")
+STATE_VERSION = "2.0"
+
+
+def migrate_state_if_needed():
+    """§15: an older (8-persona) state folder is archived - never deleted - and a new audit log starts with MIGRATION."""
+    if os.path.isdir(STATE_DIR) and os.listdir(STATE_DIR):
+        ver = None
+        if os.path.exists(VERSION_FILE):
+            with open(VERSION_FILE, "r", encoding="utf-8") as fh:
+                ver = fh.read().strip()
+        if ver == STATE_VERSION:
+            return None
+        old_log = AuditLog(AUDIT_PATH) if os.path.exists(AUDIT_PATH) else None
+        last_hash = old_log.last_hash if old_log else None
+        n_events = len(old_log.events) if old_log else 0
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = os.path.join(APP_DIR, "state_archive", stamp)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.move(STATE_DIR, dest)
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(VERSION_FILE, "w", encoding="utf-8") as fh:
+            fh.write(STATE_VERSION)
+        AuditLog(AUDIT_PATH).append({"actor_type": "SYSTEM", "actor_id": "sys.cli", "actor_name": SYSTEM_ACTORS["sys.cli"][1], "action": "MIGRATION",
+                                     "object_type": "state", "object_id": "state",
+                                     "before": {"archived_to": dest, "archived_log_last_hash": last_hash, "archived_log_events": n_events,
+                                                "previous_version": ver or "1.x (8 personas)"},
+                                     "after": {"version": STATE_VERSION}, "reason": "Rules v2.0: scope and personas reduced"})
+        return dest
+    os.makedirs(STATE_DIR, exist_ok=True)
+    if not os.path.exists(VERSION_FILE):
+        with open(VERSION_FILE, "w", encoding="utf-8") as fh:
+            fh.write(STATE_VERSION)
+    return None
+
+
 class App:
     def __init__(self, data_dir):
         self.data_dir = data_dir
         self.cfg = Config(CONFIG_DIR)
         self.registry = Registry(data_dir)
         self.audit = AuditLog(AUDIT_PATH)
-        self.engine = Engine(self.cfg, self.registry, Store(STATE_DIR), self.audit)
+        self.engine = Engine(self.cfg, self.registry, Store(STATE_DIR), self.audit, clock=Clock(os.path.join(STATE_DIR, "clock.json")))
         self.source_hashes = hash_sources(data_dir)
         self.selftest_lock = threading.Lock()
+        threading.Thread(target=self._ticker, daemon=True).start()
+
+    def _ticker(self):
+        while True:
+            time.sleep(3)
+            try:
+                self.engine.tick()
+            except Exception:
+                traceback.print_exc()
+
+
+def csv_text(rows, cols):
+    out = [",".join(cols)]
+    for e in rows:
+        vals = []
+        for c in cols:
+            x = e.get(c)
+            s = "" if x is None else (json.dumps(x, ensure_ascii=False) if isinstance(x, (dict, list)) else str(x))
+            vals.append('"' + s.replace('"', '""') + '"' if re.search(r'[",\r\n]', s) else s)
+        out.append(",".join(vals))
+    return "\r\n".join(out)
 
 
 def make_handler(app, port):
@@ -3474,7 +3993,7 @@ def make_handler(app, port):
     eng, cfg = app.engine, app.cfg
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "UtilicoPOC1/2.0"
+        server_version = "UtilicoPOC1/3.0"
         sys_version = ""
 
         def _send(self, status, body, content_type, extra=None):
@@ -3508,7 +4027,7 @@ def make_handler(app, port):
         def _user(self):
             return eng.user(self._uid())
 
-        def _need(self, screen, levels=("V", "A", "X", "OWN"), what=""):
+        def _need(self, screen, levels=("V", "A"), what=""):
             u = self._user()
             ds, sc = self._dsc()
             eng.require(u, screen, levels, ds or None, sc or None, what)
@@ -3522,8 +4041,7 @@ def make_handler(app, port):
             return json.loads(raw.decode("utf-8")) if raw else {}
 
         def _guard(self):
-            host = (self.headers.get("Host") or "").lower()
-            if host not in allowed_hosts:
+            if (self.headers.get("Host") or "").lower() not in allowed_hosts:
                 self._err(403, "Host not allowed")
                 return None
             path = unquote(urlsplit(self.path).path)
@@ -3537,7 +4055,7 @@ def make_handler(app, port):
                 fn()
             except AppError as e:
                 self._err(e.status, str(e))
-            except Exception as e:          # never leak a stack trace to the browser
+            except Exception as e:
                 traceback.print_exc()
                 self._err(500, "%s: %s" % (type(e).__name__, e))
 
@@ -3567,7 +4085,7 @@ def make_handler(app, port):
             if status >= 400:
                 sys.stderr.write("  [%s] %s\n" % (self.log_date_time_string(), fmt % args))
 
-        # ---- GET ------------------------------------------------------------------------------
+        # ---- GET -----------------------------------------------------------------------------
         def _get(self, path, q):
             qv = lambda k, d=None: (q.get(k) or [d])[0]
             if path in ("/", "/index.html"):
@@ -3581,24 +4099,19 @@ def make_handler(app, port):
                                                                    "show_agent_activity": ag.get("show_agent_activity", True)}})
             if path == "/api/me":
                 u = self._user()
-                perms = {s: v.get(u["role"], "-") for s, v in cfg.perms()["screens"].items()}
-                return self._json({"user": u, "permissions": perms, "screens": {s: v["label"] for s, v in cfg.perms()["screens"].items()},
-                                   "demo_tools": u["role"] not in cfg.perms().get("demo_tools_blocked_roles", []), "agent": cfg.agent()})
+                return self._json({"user": u, "permissions": {s: v.get(u["persona"], "-") for s, v in cfg.perms()["screens"].items()},
+                                   "screens": {s: v["label"] for s, v in cfg.perms()["screens"].items()}, "agent": cfg.agent(),
+                                   "workflow": cfg.workflow(), "now": ts(eng.clock.now()), "clock_offset_hours": eng.clock.offset_h})
             if path == "/api/datasets":
                 self._user()
                 out = []
                 for d in app.registry.list():
-                    d = dict(d, data_dir=app.data_dir)
                     dsx = app.registry.get(d["id"])
-                    d["scenarios"] = dsx.scenarios(cfg.app())
-                    d["case_codes"] = dsx.case_codes          # presenter labels (from answer_key.csv)
-                    out.append(d)
+                    out.append(dict(d, data_dir=app.data_dir, scenarios=dsx.scenarios(cfg.app()), case_codes=dsx.case_codes))
                 return self._json(out)
             parts = path.split("/")
             if len(parts) == 6 and parts[1:3] == ["api", "datasets"] and parts[4] == "files":
-                u = self._user()
-                if cfg.level(u["role"], "backscan") == "-" and cfg.level(u["role"], "explorer") == "-":
-                    eng.require(u, "explorer", ("V",), *[x or None for x in self._dsc()], what="read raw CSV files")
+                self._need("explorer", what="read raw CSV files")
                 name = parts[5]
                 if name not in ALLOWED_FILES:
                     raise NotFound("File not allowed: %s" % name)
@@ -3612,22 +4125,25 @@ def make_handler(app, port):
                 with open(full, "rb") as fh:
                     return self._send(200, fh.read(), "text/csv; charset=utf-8")
             ds, sc = self._dsc()
+            if path == "/api/alerts":
+                u = self._user()
+                st = eng.store.get(ds, sc)
+                return self._json({"notifications": st["notifications"][-6:], "now": ts(eng.clock.now()), "clock_offset_hours": eng.clock.offset_h,
+                                   "mywork": len(eng.my_work(u, ds, sc)), "autopilot": st.get("autopilot")})
             if path == "/api/dashboard":
                 u = self._need("dashboard")
                 feed = qv("feed", "all")
-                my_cases = None
                 f = {"dataset": ds, "scenario": sc}
                 if feed == "mine":
                     f["user"] = u["user_id"]
-                elif feed == "mycases":
-                    my_cases = sorted({e["case_id"] for e in app.audit.events if e.get("actor_id") == u["user_id"] and e.get("case_id")})
-                    f["case_ids"] = my_cases
+                elif feed == "mytickets":
+                    f["ticket_ids"] = sorted({e["ticket_id"] for e in app.audit.events if e.get("actor_id") == u["user_id"] and e.get("ticket_id")})
                 st = eng.store.get(ds, sc)
                 return self._json({"kpis": eng.kpis(ds, sc), "mywork": eng.my_work(u, ds, sc)[:5], "feed": eng.audit_query(f, 25)["events"],
                                    "gate_run": bool(st["gate"]), "scenario": eng.scenario(ds, sc)})
             if path == "/api/mywork":
                 u = self._need("mywork")
-                return self._json({"items": eng.my_work(u, ds, sc), "role": u["role"]})
+                return self._json({"items": eng.my_work(u, ds, sc), "persona": u["persona"]})
             if path == "/api/gate":
                 self._need("billrun")
                 st = eng.store.get(ds, sc)
@@ -3635,111 +4151,96 @@ def make_handler(app, port):
                 if g:
                     for b in g["bills"]:
                         b.update(st["bills"].get(b["bill_id"], {}))
-                        for c in b["case_ids"]:
-                            cc = st["cases"].get(c)
-                            if cc:
-                                b.setdefault("case_states", {})[c] = cc["state"]
+                        b["ticket_states"] = {tid: st["tickets"][tid]["state"] for tid in b.get("ticket_ids", []) if tid in st["tickets"]}
                 return self._json({"gate": g, "scenario": eng.scenario(ds, sc), "inject_failure": st["inject_failure"]})
-            if path == "/api/cases":
-                u = self._user()
-                lvl_list, lvl_det = cfg.level(u["role"], "cases"), cfg.level(u["role"], "case_detail")
-                if lvl_list == "-" and lvl_det != "OWN":
-                    eng.require(u, "cases", ("V", "A"), ds, sc, "list cases")
+            if path == "/api/tickets":
+                u = self._need("tickets")
                 st = eng.store.get(ds, sc)
                 rows = []
-                for c in st["cases"].values():
-                    if lvl_list == "-" and not eng.can_see_case(u, c):
-                        continue
-                    inv = c.get("investigation") or {}
-                    rows.append({k: c.get(k) for k in ("case_id", "case_type", "state", "account_id", "customer_name", "customer_class", "gates",
-                                                       "amount_at_stake", "draft_bill_id", "linked_case_ids", "requires_regulatory", "requires_master_data")}
-                                | {"probable_cause": inv.get("probable_cause"), "recommended_option": inv.get("recommended_label"),
-                                   "confidence": inv.get("confidence"), "owner_role": STATE_OWNER.get(c["state"]),
-                                   "activity_count": len(c["activity"]), "investigation_error": c.get("investigation_error")})
-                return self._json({"cases": rows})
-            if len(parts) == 4 and parts[1:3] == ["api", "cases"]:
-                u = self._user()
+                for t in st["tickets"].values():
+                    inv = t.get("investigation") or {}
+                    sv = eng.sla_view(t)
+                    rows.append({k: t.get(k) for k in ("ticket_id", "type", "state", "account_id", "customer_name", "customer_class", "gates", "amount",
+                                                       "priority", "doa_level", "draft_bill_id", "linked_ticket_ids", "flag", "returned", "closure_code", "match")}
+                                | {"probable_cause": inv.get("probable_cause"), "recommended": inv.get("recommended_label"), "confidence": inv.get("confidence"),
+                                   "assignee_persona": eng.assignee(t), "sla_worst": sv["worst"], "sla_resolve": sv.get("resolve"), "investigation_error": t.get("investigation_error")})
+                return self._json({"tickets": rows})
+            if len(parts) == 4 and parts[1:3] == ["api", "tickets"]:
+                u = self._need("ticket")
                 st = eng.store.get(ds, sc)
-                c = st["cases"].get(parts[3])
-                if not c:
-                    raise NotFound("Unknown case")
-                if not eng.can_see_case(u, c):
-                    eng.require(u, "case_detail", ("V", "A"), ds, sc, "open case %s" % parts[3])
+                t = st["tickets"].get(parts[3])
+                if not t:
+                    raise NotFound("Unknown ticket")
                 if qv("view") == "1":
-                    eng.log(ds, sc, u["user_id"], "CASE_VIEWED", "case", c["case_id"], c["case_id"])
-                out = eng.case_view(u, c)
-                out["task_context"] = eng.task_context(ds, sc, c)
-                if out["view"] == "full":
-                    v = eng.view(ds, sc, sandbox=False)
-                    out["related"] = {"crm": [x for x in v.crm_by_account.get(c["account_id"], [])],
-                                      "gl": [dict(g, period_status=(v.periods.get(g["accounting_period"]) or {}).get("status"))
-                                             for b in [c.get("draft_bill_id")] + list(c.get("issued_bill_ids") or []) if b
-                                             for g in v.gl_by_ref.get(b, []) if v.bills.get(b, {}).get("_state") == "ISSUED"]}
-                    out["audit_trail"] = eng.audit_query({"case": c["case_id"]}, 400)["events"]
-                    vs = eng.view(ds, sc, sandbox=True)
-                    out["sandbox_bill"] = vs.bills.get(c.get("draft_bill_id")) if c.get("draft_bill_id") else None
-                if c.get("integration_issue_id"):
-                    out["integration_issue"] = st["issues"].get(c["integration_issue_id"])
+                    eng.log(ds, sc, u["user_id"], "TICKET_VIEWED", "ticket", t["ticket_id"], t["ticket_id"])
+                out = eng.ticket_view(u, t)
+                v = eng.view(ds, sc, sandbox=False)
+                out["related"] = {"crm": list(v.crm_by_account.get(t["account_id"], [])),
+                                  "gl": [dict(g, period_status=(v.periods.get(g["accounting_period"]) or {}).get("status"))
+                                         for b in [t.get("draft_bill_id")] + list(t.get("issued_bill_ids") or []) if b
+                                         for g in v.gl_by_ref.get(b, []) if v.bills.get(b, {}).get("_state") == "ISSUED"]}
+                reads = v.reads_by_meter.get(t["meter_id"], {})
+                dd = t["disconnect_date"]
+                out["reads_around_disconnect"] = [{k: reads[d][k] for k in ("read_id", "read_date", "kwh", "read_quality")}
+                                                  for d in day_range(add_days(dd, -2), min(add_days(dd, 4), v.reads_until() or dd)) if d in reads]
+                out["audit_trail"] = eng.audit_query({"ticket": t["ticket_id"]}, 500)["events"]
+                vs = eng.view(ds, sc, sandbox=True)
+                out["sandbox_bill"] = vs.bills.get(t.get("draft_bill_id")) if t.get("draft_bill_id") else None
+                out["register_entry"] = st["register"].get(t.get("register_signature")) if t.get("register_signature") else None
                 return self._json(out)
-            if len(parts) == 4 and parts[1:3] == ["api", "queue"]:
-                screen = parts[3]
-                states = {"field": ("FIELD_VERIFICATION", "FIELD_OPS"), "masterdata": ("MASTER_DATA_REVIEW", "MASTER_DATA"),
-                          "finance": ("FINANCE_APPROVAL", "FINANCE"), "regulatory": ("REGULATORY_REVIEW", "REGULATORY")}.get(screen)
-                if not states:
-                    raise NotFound("Unknown queue")
+            if path in ("/api/finance", "/api/comms", "/api/digest"):
+                screen = path.rsplit("/", 1)[1]
                 u = self._need(screen)
                 st = eng.store.get(ds, sc)
-                rows = []
-                for c in st["cases"].values():
-                    if states[1] in c["roles_involved"]:
-                        cv = eng.case_view(u, c, full=cfg.level(u["role"], "case_detail") in ("V", "A"))
-                        cv["task_context"] = eng.task_context(ds, sc, c)
-                        cv["open"] = c["state"] == states[0]
-                        rows.append(cv)
-                return self._json({"items": rows})
-            if path == "/api/integration/issues":
-                self._need("integration")
+                items = []
+                for t in st["tickets"].values():
+                    if screen == "finance" and (t["state"] == "PENDING_FINANCE" or t.get("finance")):
+                        gp = t["expected"].get("gl_period") if t["type"] == "REMEDIATE" else None
+                        gps = (eng.view(ds, sc, sandbox=False).periods.get(gp) or {}).get("status") if gp else None
+                        items.append(eng.ticket_view(u, t) | {"open": t["state"] == "PENDING_FINANCE", "gl_period_status": gps})
+                    elif screen == "comms" and (t["state"] == "COMMS_APPROVAL" or (t["flag"] and t["comms"].get("approved_by"))):
+                        items.append(eng.ticket_view(u, t) | {"open": t["state"] == "COMMS_APPROVAL"})
+                    elif screen == "digest" and (t.get("decision") or {}).get("level") == "L0":
+                        items.append(eng.ticket_view(u, t) | {"open": not t.get("digest"), "flagged": eng.digest_flagged(t)})
+                return self._json({"items": items})
+            if path == "/api/register":
+                self._need("register")
                 st = eng.store.get(ds, sc)
-                out = []
-                for iss in st["issues"].values():
-                    i = copy.deepcopy(iss)
-                    i["cases"] = [{k: st["cases"][c].get(k) for k in ("case_id", "case_type", "state", "customer_name", "root_wo_id")} for c in iss["case_ids"] if c in st["cases"]]
-                    out.append(i)
-                return self._json({"issues": out})
+                return self._json({"entries": [dict(e, affected_accounts=len(e["accounts"]),
+                                                    tickets=[{"ticket_id": tid, "type": st["tickets"][tid]["type"], "state": st["tickets"][tid]["state"],
+                                                              "customer_name": st["tickets"][tid]["customer_name"], "account_id": st["tickets"][tid]["account_id"]}
+                                                             for tid in e["ticket_ids"] if tid in st["tickets"]]) for e in st["register"].values()]})
+            if path == "/api/register/export":
+                u = self._need("register", ("A",), "export the root-cause register")
+                return self._send(200, eng.export_register(u["user_id"], ds, sc).encode("utf-8"), "text/csv; charset=utf-8",
+                                  {"Content-Disposition": 'attachment; filename="engineering_handoff.csv"'})
+            if path == "/api/backscan/candidates":
+                self._need("backscan")
+                return self._json({"rows": eng.backscan_candidates(ds, sc), "scenario": eng.scenario(ds, sc)})
             if path == "/api/audit":
                 self._need("audit")
-                f = {k: qv(k) for k in ("user", "role", "action", "case", "scenario", "from", "to", "q")}
+                f = {k: qv(k) for k in ("user", "persona", "action", "ticket", "scenario", "from", "to", "q")}
                 res = eng.audit_query(f, int(qv("limit", "500")))
                 res["actions"] = sorted({e["action"] for e in app.audit.events})
                 return self._json(res)
             if path == "/api/audit/export":
-                u = self._need("audit", ("X",), "export the audit log")
-                f = {k: qv(k) for k in ("user", "role", "action", "case", "scenario", "from", "to", "q")}
+                u = self._need("audit", what="export the audit log")
+                f = {k: qv(k) for k in ("user", "persona", "action", "ticket", "scenario", "from", "to", "q")}
                 evs = eng.audit_query(f, 10 ** 9)["events"][::-1]
-                cols = ["event_id", "timestamp_utc", "timestamp_local", "scenario_time", "dataset_id", "scenario_id", "actor_type", "actor_id",
-                        "actor_name", "actor_role", "action", "object_type", "object_id", "case_id", "before", "after", "reason", "agent_mode", "prev_hash", "hash"]
-                buf = [",".join(cols)]
-                for e in evs:
-                    vals = []
-                    for c in cols:
-                        x = e.get(c)
-                        s = "" if x is None else (json.dumps(x, ensure_ascii=False) if isinstance(x, (dict, list)) else str(x))
-                        vals.append('"' + s.replace('"', '""') + '"' if re.search(r'[",\r\n]', s) else s)
-                    buf.append(",".join(vals))
-                eng.log(ds or None, sc or None, u["user_id"], "EXPORT", "audit_log", "csv", None, None, {"events": len(evs), "filters": {k: v for k, v in f.items() if v}})
-                return self._send(200, ("\r\n".join(buf)).encode("utf-8"), "text/csv; charset=utf-8",
-                                  {"Content-Disposition": 'attachment; filename="audit_log.csv"'})
+                cols = ["event_id", "timestamp_utc", "timestamp_local", "scenario_time", "dataset_id", "scenario_id", "actor_type", "actor_id", "actor_name",
+                        "actor_persona", "action", "object_type", "object_id", "ticket_id", "before", "after", "reason", "agent_mode", "autopilot", "prev_hash", "hash"]
+                eng.log(ds or None, sc or None, u["user_id"], "AUDIT_EXPORTED", "audit_log", "csv", None, None, {"events": len(evs), "filters": {k: v for k, v in f.items() if v}})
+                return self._send(200, csv_text(evs, cols).encode("utf-8"), "text/csv; charset=utf-8", {"Content-Disposition": 'attachment; filename="audit_log.csv"'})
             if path == "/api/sandbox":
                 self._need("explorer")
-                st = eng.store.get(ds, sc)
-                return self._json({"overlays": st["overlays"], "scenario": eng.scenario(ds, sc)})
+                return self._json({"overlays": eng.store.get(ds, sc)["overlays"], "scenario": eng.scenario(ds, sc)})
             if path == "/api/selftest":
                 self._need("selftest")
                 with app.selftest_lock:
                     return self._json(SelfTest(cfg, app.registry, app.source_hashes, app.data_dir).run())
             raise NotFound("Not found")
 
-        # ---- POST -----------------------------------------------------------------------------
+        # ---- POST ----------------------------------------------------------------------------
         def _post(self, path):
             body = self._body()
             ds, sc = self._dsc()
@@ -3763,32 +4264,40 @@ def make_handler(app, port):
                 return self._json({"gate": eng.run_gate(self._uid(), ds, sc)})
             if path == "/api/bills/release":
                 return self._json({"released": eng.release(self._uid(), ds, sc, body.get("bill_ids") or [], bool(body.get("all_passed")))})
-            if len(parts) == 5 and parts[1:3] == ["api", "cases"] and parts[4] == "action":
-                u = self._user()
-                c = eng.act(u["user_id"], ds, sc, parts[3], body.get("action"), body)
-                return self._json({"case": eng.case_view(u, c) if eng.can_see_case(u, c) else {"case_id": c["case_id"], "state": c["state"]}})
+            if len(parts) == 5 and parts[1:3] == ["api", "tickets"] and parts[4] == "action":
+                u = self._need("ticket", ("A",), "act on tickets")
+                t = eng.act(u["user_id"], ds, sc, parts[3], body.get("action"), body)
+                return self._json({"ticket": eng.ticket_view(u, t)})
             if path == "/api/backscan/send":
-                return self._json({"cases": eng.send_backscan(self._uid(), ds, sc)})
-            if len(parts) == 5 and parts[1:4] == ["api", "integration", "issues"]:
-                return self._json({"issue": eng.issue_action(self._uid(), ds, sc, parts[4], body.get("action"), body.get("ticket_ref"), body.get("note"))})
+                return self._json({"tickets": eng.send_backscan(self._uid(), ds, sc, body.get("wo_ids") or None)})
             if path == "/api/audit/verify":
-                u = self._need("audit", ("X",), "verify audit integrity")
+                u = self._need("audit", what="verify audit integrity")
                 res = app.audit.verify()
                 eng.log(ds or None, sc or None, u["user_id"], "AUDIT_VERIFIED", "audit_log", "hash_chain", after={"ok": res["ok"], "events": res["events"]})
                 return self._json(res)
             if path == "/api/demo/reset":
+                self._need("selftest")
                 eng.reset(self._uid(), ds, sc, body.get("scope", "current"))
                 return self._json({"ok": True})
             if path == "/api/demo/inject_failure":
+                self._need("selftest")
                 eng.set_inject_failure(self._uid(), ds, sc, body.get("enabled"))
                 return self._json({"ok": True, "enabled": bool(body.get("enabled"))})
+            if path == "/api/demo/clock":
+                self._need("selftest")
+                eng.advance_clock(self._uid(), ds, sc, body.get("hours", 0))
+                return self._json({"now": ts(eng.clock.now()), "offset_hours": eng.clock.offset_h})
+            if path == "/api/demo/autopilot":
+                self._need("selftest")
+                eng.start_autopilot(self._uid(), ds, sc)
+                return self._json({"ok": True})
             raise NotFound("Not found")
 
     return Handler
 
 
 # =============================================================================================
-# SECTION 16 - MAIN
+# SECTION 17 - MAIN
 # =============================================================================================
 def resolve_data_dir(cli_value):
     if cli_value:
@@ -3804,13 +4313,13 @@ def main(argv=None):
     parser.add_argument("--data", help="data folder containing dataset subfolders (default: %s)" % DEFAULT_DATA_DIR)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="port on 127.0.0.1 (default: %d)" % DEFAULT_PORT)
     parser.add_argument("--no-browser", action="store_true", help="don't open the default browser")
-    parser.add_argument("--reset", action="store_true", help="clear case state and sandbox (appends DEMO_RESET), then start")
+    parser.add_argument("--reset", action="store_true", help="clear tickets, sandboxes and the demo clock (appends DEMO_RESET), then start")
     parser.add_argument("--purge-log", action="store_true", help="with --reset: also delete the audit log (command line only)")
     args = parser.parse_args(argv)
 
     data_dir, source = resolve_data_dir(args.data)
     data_dir = os.path.abspath(os.path.expanduser(data_dir))
-    print("POC 1 - Disconnect-vs-Billing Detector + Pre-bill guard")
+    print("POC 1 - Disconnect-vs-Billing Detector + Pre-bill guard (rules v2.0)")
     print("  Data folder : %s  (from %s)" % (data_dir, source))
     if not os.path.isfile(INDEX_HTML):
         print("\nERROR: index.html was not found next to server.py (%s)." % APP_DIR, file=sys.stderr)
@@ -3824,11 +4333,16 @@ def main(argv=None):
         return 1
     try:
         cfg = Config(CONFIG_DIR)
-        cfg.users(), cfg.perms(), cfg.playbooks(), cfg.app()
+        cfg.users(), cfg.perms(), cfg.playbooks(), cfg.app(), cfg.workflow(), cfg.sla()
         make_llm_client(cfg.agent())
+        if not os.path.isfile(os.path.join(CONFIG_DIR, "workflow_rules.md")):
+            raise AppError("config/workflow_rules.md (v2.0) is missing")
     except (OSError, ValueError, AppError) as e:
         print("\nERROR: configuration problem in %s: %s" % (CONFIG_DIR, e), file=sys.stderr)
         return 1
+    archived = migrate_state_if_needed()
+    if archived:
+        print("  Migration   : previous state archived to %s (MIGRATION logged)" % archived)
     if args.reset and args.purge_log and os.path.exists(AUDIT_PATH):
         os.remove(AUDIT_PATH)
         print("  Audit log   : purged (command-line --reset --purge-log)")
@@ -3840,13 +4354,11 @@ def main(argv=None):
     if not datasets:
         print("\nERROR: no datasets found in %s" % data_dir, file=sys.stderr)
         print("       A dataset is any subfolder (up to %d levels deep) that contains %s." % (MAX_DEPTH, MARKER_FILE), file=sys.stderr)
-        print("       The app will still start; add the folders and click Reload in the browser.", file=sys.stderr)
     for d in datasets:
-        note = "all %d files" % len(d["files_present"]) if not d["files_missing"] else \
-            "%d files, missing: %s" % (len(d["files_present"]), ", ".join(d["files_missing"]))
+        note = "all %d files" % len(d["files_present"]) if not d["files_missing"] else "%d files, missing: %s" % (len(d["files_present"]), ", ".join(d["files_missing"]))
         print("  Dataset     : %s  [%s]  (%s)" % (d["name"], d["folder"], note))
     print("  Agent       : %s (scripted, no network, no API key)" % cfg.agent().get("mode"))
-    print("  State       : %s" % STATE_DIR)
+    print("  Personas    : %s" % ", ".join("%s (%s)" % (u["name"], u["persona"]) for u in cfg.users()))
     try:
         httpd = ThreadingHTTPServer((HOST, args.port), make_handler(app, args.port))
     except OSError as exc:

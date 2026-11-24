@@ -395,6 +395,28 @@ textarea.letter-edit{min-height:180px;font-family:inherit}
 .grid-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 @media (max-width:1000px){.grid-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .demo-card .card-body{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+/* ---- v2.0: 3 personas, BEX tickets, SLA, priority ---- */
+.user-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:820px){.user-grid.three{grid-template-columns:1fr}}
+.kpis.kpis-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:980px){.kpis.kpis-4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.prio{display:inline-block;font-size:11px;font-weight:800;padding:1px 7px;border-radius:5px;color:#fff;white-space:nowrap}
+.prio-P1{background:var(--high)} .prio-P2{background:var(--med)} .prio-P3{background:var(--accent)} .prio-P4{background:var(--faint)}
+.sla{display:inline-block;font-size:11px;font-weight:650;padding:1px 7px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
+.sla-ok{background:var(--pass-bg);color:var(--pass)} .sla-met{background:var(--surface-2);color:var(--muted);border-color:var(--border)}
+.sla-warn{background:var(--med-bg);color:var(--med)} .sla-bad{background:var(--high-bg);color:var(--high)}
+.sla-list{display:flex;flex-direction:column;gap:6px}
+.sla-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px}.sla-row>span:first-child{min-width:130px;font-weight:600}
+.alert-bar{background:var(--high-bg);border-top:1px solid color-mix(in srgb,var(--high) 30%,transparent)}
+.alert-inner{max-width:1500px;margin:0 auto;padding:6px 20px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:12.5px;color:var(--high)}
+.alert-item.mgr{font-weight:700}
+.clock-pill{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--med-bg);color:var(--med);white-space:nowrap}
+.pill.flag{background:var(--high-bg);color:var(--high);border-color:transparent}
+.inline-details{margin:6px 0}.inline-details>summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--accent)}
+.act-sec h4{margin:0 0 8px;font-size:14px}
+hr.sep{border:0;border-top:1px solid var(--border);margin:14px 0}
+.sec-h{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:24px 0 8px}
+.wf-sent{font-size:11.5px;color:var(--pass);font-weight:650}
 </style>
 </head>
 <body>
@@ -412,6 +434,7 @@ textarea.letter-edit{min-height:180px;font-family:inherit}
     </div>
     <div class="header-right">
       <span class="agent-badge" id="agentBadge" hidden title="Deterministic scripted agent; no network, no API key">Agent: mock (scripted)</span>
+      <span class="clock-pill" id="clockPill" hidden title="Demo clock advanced from the Self-test screen"></span>
       <div class="hdr-controls" id="hdrControls" hidden>
         <label class="sr" for="dsSelect">Dataset</label><select id="dsSelect"></select>
         <label class="sr" for="scSelect">Scenario</label><select id="scSelect"></select>
@@ -423,6 +446,7 @@ textarea.letter-edit{min-height:180px;font-family:inherit}
     </div>
   </div>
   <div class="source-bar" id="sourceBar" hidden><div class="source-line" id="sourceLine"></div></div>
+  <div class="alert-bar" id="alertBar" hidden role="status"></div>
 </header>
 
 <div class="shell" id="shell" hidden>
@@ -1057,48 +1081,43 @@ function discoverLocal(fileList) {
 }
 
 /* =========================================================================
-   SECTION 6 — UI: app shell, sign-in, roles, screens
+   SECTION 6 — UI: app shell, sign-in, personas, BEX tickets (rules v2.0)
    ========================================================================= */
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const MODE_LABEL = { backscan: 'Back-scan', daily: 'Daily check' };
 const DEFAULT_ASOF = '2026-11-02';
-const ROLE_LABEL = { BILLING_OPS: 'Billing Ops', DRI: 'DRI', FIELD_OPS: 'Field Ops', MASTER_DATA: 'Master Data', INTEGRATION: 'Integration', FINANCE: 'Finance', REGULATORY: 'Regulatory', AUDITOR: 'Auditor' };
-const CASE_STATES = ['DETECTED', 'INVESTIGATED', 'MASTER_DATA_REVIEW', 'DRI_DECISION', 'FIELD_VERIFICATION', 'FINANCE_APPROVAL', 'PLAN_APPROVAL', 'EXECUTING', 'VERIFYING', 'REGULATORY_REVIEW', 'READY_TO_RELEASE', 'RESOLVED'];
-const AGENT_STATES = ['DETECTED', 'INVESTIGATED', 'EXECUTING', 'VERIFYING'];
+const PERSONA_LABEL = { BILLING_OPS: 'Billing Ops Analyst', DRI: 'DRI', FINANCE: 'Finance' };
+const T_STATES = ['NEW', 'INVESTIGATING', 'TRIAGE', 'AWAITING_DECISION', 'PENDING_FINANCE', 'PLAN_APPROVAL', 'IN_PROGRESS', 'VERIFYING', 'COMMS_APPROVAL', 'READY_TO_RELEASE', 'RESOLVED', 'CLOSED'];
+const AGENT_STATES = ['NEW', 'INVESTIGATING', 'IN_PROGRESS', 'VERIFYING'];
+const DONE = ['RESOLVED', 'CLOSED', 'CANCELLED'];
 const NAV = [
   ['Overview', ['dashboard', 'mywork']],
-  ['Pre-bill guard', ['billrun', 'cases']],
+  ['Pre-bill guard', ['billrun', 'tickets']],
   ['POC 1 detector', ['backscan']],
-  ['Role queues', ['masterdata', 'field', 'finance', 'regulatory', 'integration']],
-  ['Data & assurance', ['explorer', 'audit', 'selftest']],
+  ['Approvals & review', ['finance', 'digest', 'comms']],
+  ['Data & assurance', ['register', 'explorer', 'audit', 'selftest']],
 ];
-// POC 1 state (back-scan / daily check / explorer / POC 1 self-test)
 const state = {
   dsId: null, mode: 'backscan', asOf: DEFAULT_ASOF, scan: null, scanTouched: false, labels: false, theme: 'auto',
   sevFilter: 'ALL', causeFilter: 'ALL', sort: { key: 'severity', dir: -1 }, result: null, running: false, banner: null,
   detail: null, explorer: { file: 'oms_work_orders.csv', q: '', page: 0, mode: 'base' }, stPick: null,
 };
-// App state (roles, workflow)
-const S = { users: [], agent: null, me: null, perms: {}, labels: {}, demoTools: false, datasets: [], dsId: null, scId: null,
-  route: { screen: 'dashboard', id: null }, offline: false, work: [], last: {}, feed: 'all', auditF: {}, serverTest: null, testing: false,
-  sandbox: null, pollTimer: null, busy: false };
+const S = { users: [], agent: null, me: null, perms: {}, labels: {}, datasets: [], dsId: null, scId: null, route: { screen: 'dashboard', id: null },
+  offline: false, workCount: 0, alerts: null, last: {}, feed: 'all', auditF: {}, serverTest: null, testing: false, sandbox: null, pollTimer: null, busy: false, bsCand: null };
 
 const hdrs = () => ({ 'X-User-Id': S.me ? S.me.user_id : '', 'X-Dataset-Id': S.dsId || '', 'X-Scenario-Id': S.scId || '' });
 async function api(path, opt = {}) {
   const r = await fetch(path, { method: opt.method || 'GET', cache: 'no-store',
     headers: Object.assign(hdrs(), opt.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     body: opt.body !== undefined ? JSON.stringify(opt.body) : undefined });
-  if (opt.raw) { if (!r.ok) throw new Error((await r.text()) || 'HTTP ' + r.status); return r.text(); }
+  if (opt.raw) { if (!r.ok) { let m; try { m = (await r.json()).error; } catch (e) { m = 'HTTP ' + r.status; } throw new Error(m); } return r.text(); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(j.error || 'HTTP ' + r.status); e.status = r.status; throw e; }
   return j;
 }
 let toastTimer = null;
-function toast(msg, err) {
-  const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, err ? 6000 : 3000);
-}
+function toast(msg, err) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, err ? 6000 : 3000); }
 const can = screen => !!S.perms[screen] && S.perms[screen] !== '-';
 const lvl = screen => S.perms[screen] || '-';
 const initials = n => n.split(/\s+/).map(x => x[0]).join('').slice(0, 2).toUpperCase();
@@ -1108,15 +1127,25 @@ const tagFor = accountId => { const code = state.labels ? caseCode(accountId) : 
 const sevBadge = s => `<span class="badge sev-${esc(s)}">${esc(s)}</span>`;
 const stBadge = m => m ? `<span class="badge st-${esc(m.status)}">${esc(m.status)}</span>` : '<span class="badge st-NONE">NO MESSAGE</span>';
 const ruleChips = rs => rs.map(r => `<span class="rule" title="${esc(RULES[r] || r)}">${r}</span>`).join('');
-const typeBadge = t => `<span class="type-badge t-${esc(t)}">${esc(t === 'REVENUE_PROTECTION' ? 'REV. PROTECTION' : t)}</span>`;
-const stateBadge = s => { const cls = s === 'RESOLVED' ? 's-done' : s === 'CLOSED_NO_ACTION' ? 's-closed' : s === 'RETURNED_TO_DRI' ? 's-ret' : AGENT_STATES.includes(s) ? 's-agent' : 's-wait';
+const typeBadge = t => `<span class="type-badge t-${esc(t)}">${esc(t)}</span>`;
+const prioBadge = p => p ? `<span class="prio prio-${esc(p)}">${esc(p)}</span>` : '';
+const doaBadge = l => l ? `<span class="pill" title="${l === 'L0' ? 'Analyst alone' : l === 'L1' ? 'DRI' : 'DRI + Finance'}">DoA ${esc(l)}</span>` : '';
+const stateBadge = s => { const cls = s === 'RESOLVED' || s === 'CLOSED' ? 's-done' : s === 'CANCELLED' ? 's-closed' : AGENT_STATES.includes(s) ? 's-agent' : 's-wait';
   return `<span class="state-badge ${cls}">${esc(s.replace(/_/g, ' '))}</span>`; };
 const outcomeBadge = o => `<span class="badge o-${esc(o)}">${esc(o.replace('_', '-'))}</span>`;
-const fmtAge = s => s == null ? '' : s < 60 ? s + 's' : s < 3600 ? Math.round(s / 60) + 'm' : Math.round(s / 3600) + 'h';
-const fmtLocal = ts => ts ? ts.replace('T', ' ').slice(0, 19) : '';
-const gateTags = gs => (gs || []).map(g => `<span class="rule" title="${esc({ G1: 'Bill covers post-disconnect days', G2: 'Estimated reads post-disconnect', G3: 'SA active despite stop', G4: 'Integration message failed / unprocessed', G5: 'ID near-match (unmatched disconnect)', G6: 'Actual consumption after disconnect' }[g] || g)}">${g}</span>`).join('');
+const fmtLocal = x => x ? x.replace('T', ' ').slice(0, 16) : '';
+const gateTags = gs => (gs || []).map(g => `<span class="rule" title="${esc({ G1: 'Bill covers post-disconnect days', G2: 'Estimated reads post-disconnect', G3: 'SA active despite stop', G4: 'Integration message failed / unprocessed', G5: 'ID near-match (unmatched disconnect)' }[g] || g)}">${g}</span>`).join('');
+const uname = id => { if (!id) return ''; const u = S.users.find(x => x.user_id === id); return u ? u.name : id; };
 const curDs = () => S.datasets.find(d => d.id === S.dsId);
-const curSc = () => (curDs() || { scenarios: [] }).scenarios.find(s => s.scenario_id === S.scId);
+const curSc = () => ((curDs() || {}).scenarios || []).find(s => s.scenario_id === S.scId);
+function slaBadge(sv, compact) {
+  if (!sv) return '';
+  const c = sv.resolve || sv;
+  if (!c || !c.due) return '';
+  const cls = sv.worst === 'BREACHED' || c.status === 'BREACHED' ? 'sla-bad' : sv.worst === 'AT_RISK' || c.status === 'AT_RISK' ? 'sla-warn' : c.status === 'MET' ? 'sla-met' : 'sla-ok';
+  const txt = c.status === 'MET' ? 'met' : c.status === 'BREACHED' ? 'breached' : `${c.remaining_business_hours}h left`;
+  return `<span class="sla ${cls}" title="Resolve due ${esc(fmtLocal(c.due))} · ${c.pct}% elapsed (business hours)">${esc(txt)}${compact ? '' : ` · due ${esc(fmtLocal(c.due))}`}</span>`;
+}
 
 /* ---------- Boot, sign-in ---------- */
 async function boot() {
@@ -1127,26 +1156,23 @@ async function boot() {
     const j = await r.json();
     S.users = j.users; S.agent = j.agent;
   } catch (e) { S.offline = true; showOffline(e); return; }
-  const m = location.hash.match(/[?&]u=([\w.]+)/);
-  if (m && S.users.some(u => u.user_id === m[1])) signIn(m[1]); else showSignIn();
+  showSignIn();
 }
-const ROLE_CAN = {
-  BILLING_OPS: 'Runs the pre-bill gate, releases bills, sends back-scan findings to the workflow.',
-  DRI: 'Decides the option for each case and approves execution plans.',
-  FIELD_OPS: 'Records field verification outcomes.', MASTER_DATA: 'Confirms or rejects suggested premise matches.',
-  INTEGRATION: 'Acknowledges and fixes integration error signatures.', FINANCE: 'Approves credits and large reductions.',
-  REGULATORY: 'Reviews and edits customer letters and regulator responses.', AUDITOR: 'Read-only; exports and verifies the audit log.' };
+const PERSONA_DOES = {
+  BILLING_OPS: 'Runs the pre-bill gate, triages every ticket, confirms ID matches, decides L0 cases. Only person who releases bills.',
+  DRI: 'Owns every ticket. Decides L1/L2, approves plans, owns customer and regulator communications, reviews the L0 digest.',
+  FINANCE: 'Approves large pre-issue reductions and every credit on issued bills (separate approver for SoD).' };
 function showSignIn() {
   stopPolling();
-  $('#shell').hidden = true; $('#hdrControls').hidden = true; $('#sourceBar').hidden = true;
+  $('#shell').hidden = true; $('#hdrControls').hidden = true; $('#sourceBar').hidden = true; $('#alertBar').hidden = true;
   $('#agentBadge').hidden = !S.agent; if (S.agent) $('#agentBadge').textContent = S.agent.label;
   $('#stage').hidden = false;
   $('#stage').innerHTML = `<div class="signin"><h2>Sign in</h2>
-    <p class="muted">Simulated sign-in (no passwords). Each user sees only the screens and work items for their role; the server enforces the same permissions.</p>
-    <div class="user-grid">${S.users.map(u => `<button class="user-card" data-signin="${esc(u.user_id)}" type="button">
+    <p class="muted">Simulated sign-in (no passwords). Three personas, per workflow rules v2.0. Each sees only their screens; the server enforces every permission and segregation-of-duties rule.</p>
+    <div class="user-grid three">${S.users.map(u => `<button class="user-card" data-signin="${esc(u.user_id)}" type="button">
       <div class="uc-top"><span class="avatar">${esc(initials(u.name))}</span><div><div class="uc-name">${esc(u.name)}</div><div class="uc-role">${esc(u.title)}</div></div></div>
-      <span class="pill">${esc(u.role)}</span><div class="uc-can">${esc(ROLE_CAN[u.role] || '')}</div></button>`).join('')}</div>
-    <p class="note" style="margin-top:18px">All data is fictional. The agents are a deterministic mock (no network, no API key). Source CSVs are read-only; corrections go to a sandbox.</p></div>`;
+      <span class="pill">${esc(u.persona)}</span><div class="uc-can">${esc(PERSONA_DOES[u.persona] || '')}</div></button>`).join('')}</div>
+    <p class="note" style="margin-top:18px">All data is fictional. Agents are a deterministic mock (no network, no API key). Source CSVs are read-only; corrections go to a sandbox. Gate, agents and system actors can never approve anything.</p></div>`;
 }
 async function signIn(uid) {
   const prev = S.me && S.me.user_id;
@@ -1164,16 +1190,12 @@ async function signIn(uid) {
     }
     await api('/api/session/sign_in', { method: 'POST', body: { user_id: uid, previous_user_id: prev || null } });
     const me = await api('/api/me');
-    S.me = me.user; S.perms = me.permissions; S.labels = me.screens; S.demoTools = me.demo_tools;
+    S.me = me.user; S.perms = me.permissions; S.labels = me.screens;
   } catch (e) { toast('Sign-in failed: ' + e.message, true); return; }
-  if (!S.datasets.length) { $('#stage').innerHTML = `<div class="panel error"><h2>No datasets found</h2><p>The server found no folder containing ccb_bill_segments.csv. Add dataset folders and reload.</p></div>`; return; }
   $('#stage').hidden = true; $('#shell').hidden = false; $('#hdrControls').hidden = false;
+  S.last = {}; S.workCount = 0;
   renderHeader();
-  // A switched user starts on the dashboard (never on the previous user's page); a fresh sign-in may deep-link.
-  const want = prev ? ['dashboard'] : (location.hash.replace(/^#\/?/, '').split('?')[0] || '').split('/');
-  const screen = want[0] && (can(want[0]) || (want[0] === 'case' && can('case_detail'))) ? want[0] : 'dashboard';
-  S.last = {}; S.work = [];
-  go(screen, want[1] || null, true);
+  go('dashboard', null, true);
   startPolling();
 }
 
@@ -1183,10 +1205,9 @@ function renderHeader() {
   $('#agentBadge').hidden = false; $('#agentBadge').textContent = S.agent ? S.agent.label : 'Agent: mock (scripted)';
   $('#dsSelect').innerHTML = S.datasets.map(d => `<option value="${esc(d.id)}"${d.id === S.dsId ? ' selected' : ''}>${esc(d.name)}</option>`).join('');
   $('#scSelect').innerHTML = (ds ? ds.scenarios : []).map(s => `<option value="${esc(s.scenario_id)}"${s.scenario_id === S.scId ? ' selected' : ''}>${esc(s.scenario_id)} — ${esc(s.label)}</option>`).join('');
-  $('#userChip').innerHTML = `<span class="avatar">${esc(initials(S.me.name))}</span><span class="who">${esc(S.me.name)}<small>${esc(S.me.title)} · ${esc(S.me.role)}</small></span>
+  $('#userChip').innerHTML = `<span class="avatar">${esc(initials(S.me.name))}</span><span class="who">${esc(S.me.name)}<small>${esc(S.me.title)}</small></span>
     <button class="btn ghost sm" data-action="switch-user" type="button">Switch user</button>`;
-  $('#workBtn').hidden = !can('mywork');
-  renderSourceLine();
+  renderSourceLine(); renderAlerts();
   $('#themeBtn').textContent = 'Theme: ' + { auto: 'Auto', light: 'Light', dark: 'Dark' }[state.theme];
 }
 function renderSourceLine() {
@@ -1198,15 +1219,26 @@ function renderSourceLine() {
     <span class="path">${esc(ds.folder)}</span><b>${(ds.files_present || ds.present || []).length} files</b>${d ? `<span class="num">${d.rowCount.toLocaleString()} rows</span>` : ''}
     <span>· scenario <b>${esc(S.scId || '—')}</b>${curSc() ? ` (time ${esc(curSc().scenario_time)})` : ''}</span><span>· source CSVs read-only</span>`;
 }
+function renderAlerts() {
+  const a = S.alerts, bar = $('#alertBar'), pill = $('#clockPill');
+  $('#workCount').textContent = S.workCount;
+  if (!a) { bar.hidden = true; pill.hidden = true; return; }
+  pill.hidden = !a.clock_offset_hours;
+  pill.textContent = `Demo clock ${fmtLocal(a.now)} (+${Math.round(a.clock_offset_hours * 10) / 10}h)`;
+  const notes = a.notifications || [];
+  const ap = a.autopilot && a.autopilot.running ? `<span class="pill"><span class="spinner"></span> Demo autopilot running…</span>` : '';
+  if (!notes.length && !ap) { bar.hidden = true; return; }
+  bar.hidden = false;
+  bar.innerHTML = `<div class="alert-inner">${ap}${notes.slice(-3).reverse().map(n => `<span class="alert-item${n.manager ? ' mgr' : ''}">${n.manager ? '⚑ Billing Manager notified' : '▲ SLA escalation'} — <a class="linkish" href="#/ticket/${encodeURIComponent(n.ticket_id)}">${esc(n.ticket_id)}</a> ${esc(n.message.replace(n.ticket_id, '').trim())}</span>`).join('')}</div>`;
+}
 function renderNav() {
-  const w = S.work.length;
   $('#nav').innerHTML = NAV.map(([grp, items]) => {
     const vis = items.filter(can);
     if (!vis.length) return '';
     return `<div class="grp">${esc(grp)}</div>` + vis.map(s => {
-      const on = S.route.screen === s || (S.route.screen === 'case' && s === 'cases');
+      const on = S.route.screen === s || (S.route.screen === 'ticket' && s === 'tickets');
       const l = lvl(s);
-      const badge = s === 'mywork' && w ? `<span class="cnt">${w}</span>` : `<span class="lvl" title="${l === 'A' ? 'Can act' : l === 'X' ? 'View, export, verify' : 'View only'}">${l === 'A' ? 'act' : l === 'X' ? 'audit' : 'view'}</span>`;
+      const badge = s === 'mywork' && S.workCount ? `<span class="cnt">${S.workCount}</span>` : `<span class="lvl">${l === 'A' ? 'act' : 'view'}</span>`;
       return `<a href="#/${s}" class="${on ? 'on' : ''}" data-nav="${s}">${esc(S.labels[s] || s)}${badge}</a>`;
     }).join('');
   }).join('');
@@ -1221,16 +1253,14 @@ async function route(silent) {
   const parts = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const screen = parts[0] || 'dashboard', id = parts[1] ? decodeURIComponent(parts[1]) : null;
   S.route = { screen, id };
-  state.detail = null; renderDrawer();
-  renderNav();
+  state.detail = null; renderDrawer(); renderNav();
   const def = SCREENS[screen];
-  const allowed = screen === 'case' ? can('case_detail') : can(screen);
-  if (!def || !allowed) { $('#view').innerHTML = `<div class="panel"><h2>Not available</h2><p>${esc(S.me.role)} does not have access to this screen.</p></div>`; return; }
+  if (!def || !can(screen)) { $('#view').innerHTML = `<div class="panel"><h2>Not available</h2><p>${esc(PERSONA_LABEL[S.me.persona] || S.me.persona)} does not have access to this screen.</p></div>`; return; }
   if (!silent) $('#view').innerHTML = `<div class="loading"><span class="spinner"></span> Loading…</div>`;
   const token = S.routeSeq = (S.routeSeq || 0) + 1;
   try {
     const data = def.load ? await def.load(id, !silent) : null;
-    if (token !== S.routeSeq) return;              // a newer navigation superseded this one
+    if (token !== S.routeSeq) return;
     S.last[screen + (id || '')] = JSON.stringify(data);
     $('#view').innerHTML = def.render(data, id);
     if (def.after) def.after(data, id);
@@ -1239,21 +1269,21 @@ async function route(silent) {
     $('#view').innerHTML = `<div class="panel error"><h2>${e.status === 403 ? 'Permission denied' : 'Could not load'}</h2><p>${esc(e.message)}</p></div>`;
   }
 }
-/** Live refresh: re-render only when the data changed and the user is not editing a form. */
 function editing() {
   const v = $('#view');
-  return [...v.querySelectorAll('[data-dirty="1"]')].length > 0 || (v.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+  return v.querySelectorAll('[data-dirty="1"]').length > 0 || (v.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
 }
 async function refresh() {
-  if (!S.me || S.busy || document.hidden) return;
+  if (!S.me || S.busy || document.hidden || S.offline) return;
   const who = S.me.user_id, ctx = S.dsId + '|' + S.scId;
-  const stale = () => !S.me || S.me.user_id !== who || S.dsId + '|' + S.scId !== ctx;   // user / scenario switched mid-request
+  const stale = () => !S.me || S.me.user_id !== who || S.dsId + '|' + S.scId !== ctx;
   try {
-    const w = can('mywork') ? (await api('/api/mywork')).items : [];
+    const a = await api('/api/alerts');
     if (stale()) return;
-    if (JSON.stringify(w) !== JSON.stringify(S.work)) { S.work = w; renderNav(); }
-    $('#workCount').textContent = w.length;
-  } catch (e) { /* ignore transient */ }
+    const changedCount = a.mywork !== S.workCount;
+    S.alerts = a; S.workCount = a.mywork; renderAlerts();
+    if (changedCount) renderNav();
+  } catch (e) { /* transient */ }
   const def = SCREENS[S.route.screen];
   if (!def || !def.live) return;
   try {
@@ -1268,7 +1298,7 @@ async function refresh() {
     $('#view').innerHTML = def.render(data, S.route.id);
     if (def.after) def.after(data, S.route.id);
     window.scrollTo(0, y);
-  } catch (e) { /* ignore transient */ }
+  } catch (e) { /* transient */ }
 }
 function startPolling() { stopPolling(); S.pollTimer = setInterval(refresh, 1200); refresh(); }
 function stopPolling() { clearInterval(S.pollTimer); S.pollTimer = null; }
@@ -1280,406 +1310,410 @@ async function switchContext(kind, value) {
     if (!ds.scenarios.some(s => s.scenario_id === S.scId)) S.scId = (ds.scenarios.find(s => s.kind === 'REPLAY') || ds.scenarios[0]).scenario_id;
     state.detail = null;
   } else S.scId = value;
-  try { await api('/api/context', { method: 'POST', body: { changed: kind, previous: prev } }); } catch (e) { /* logged best-effort */ }
-  S.last = {}; S.sandbox = null;
+  try { await api('/api/context', { method: 'POST', body: { changed: kind, previous: prev } }); } catch (e) { /* best effort */ }
+  S.last = {}; S.sandbox = null; S.bsCand = null; S.alerts = null;
   renderHeader();
-  if (S.route.screen === 'case') go('cases'); else route();
+  if (S.route.screen === 'ticket') go('tickets'); else route();
+  refresh();
 }
-async function act(caseId, action, payload) {
+async function act(tid, action, payload) {
   S.busy = true;
   try {
-    const r = await api(`/api/cases/${encodeURIComponent(caseId)}/action`, { method: 'POST', body: Object.assign({ action }, payload || {}) });
-    toast(`${action.replace(/_/g, ' ').toLowerCase()} — case is now ${r.case.state.replace(/_/g, ' ')}`);
+    const r = await api(`/api/tickets/${encodeURIComponent(tid)}/action`, { method: 'POST', body: Object.assign({ action }, payload || {}) });
+    toast(`${action.replace(/_/g, ' ').toLowerCase()} — ${tid} is now ${r.ticket.state.replace(/_/g, ' ')}`);
     return r;
   } catch (e) { toast(e.message, true); throw e; }
   finally { S.busy = false; S.last = {}; await route(true); refresh(); }
 }
+async function post(path, body, okMsg) {
+  S.busy = true;
+  try { const r = await api(path, { method: 'POST', body: body || {} }); if (okMsg) toast(okMsg); return r; }
+  catch (e) { toast(e.message, true); return null; }
+  finally { S.busy = false; S.last = {}; await route(true); refresh(); }
+}
 
-/* ---------- Screens ---------- */
+/* ---------- Shared bits ---------- */
 const SCREENS = {};
 const head = (title, sub, tools) => `<div class="page-head"><div><h2>${title}</h2>${sub ? `<p>${sub}</p>` : ''}</div>${tools ? `<div class="tools">${tools}</div>` : ''}</div>`;
 const kpi = (l, v, s, c) => `<div class="kpi ${c || ''}"><div class="k-label">${esc(l)}</div><div class="k-value">${esc(v)}</div><div class="k-sub" title="${esc(s)}">${esc(s)}</div></div>`;
-const caseLink = (id, label) => can('case_detail') ? `<a href="#/case/${encodeURIComponent(id)}" class="linkish mono">${esc(label || id)}</a>` : `<span class="mono">${esc(label || id)}</span>`;
+const ticketLink = (id, label) => `<a href="#/ticket/${encodeURIComponent(id)}" class="linkish mono">${esc(label || id)}</a>`;
 const scLabel = () => { const s = curSc(); return s ? `${esc(s.label)} · scenario time ${esc(s.scenario_time)}` : ''; };
-function eventWho(e) { return e.actor_type === 'USER' ? `${esc(e.actor_name)} <span class="faint">· ${esc(ROLE_LABEL[e.actor_role] || e.actor_role || '')}</span>` : `<span class="pill">${esc(e.actor_name)}</span>`; }
+function eventWho(e) { return e.actor_type === 'USER' ? `${esc(e.actor_name)} <span class="faint">· ${esc(PERSONA_LABEL[e.actor_persona] || e.actor_persona || '')}</span>${e.autopilot ? ' <span class="pill" title="performed by demo autopilot">autopilot</span>' : ''}` : `<span class="pill">${esc(e.actor_name)}</span>`; }
 function eventDetail(e) {
-  const a = e.after || {};
-  const bits = [];
+  const a = e.after || {}, bits = [];
   if (e.before && e.before.state && a.state) bits.push(`${e.before.state} → ${a.state}`);
-  else if (a.state) bits.push(a.state);
   if (e.action === 'AGENT_TOOL_CALL') bits.push(`${a.ok === false ? '✗ ' : ''}${a.result || ''}`);
   else if (a.outcome) bits.push(a.outcome + (a.rules && a.rules.length ? ' ' + a.rules.join(',') : ''));
-  else if (a.option_id) bits.push(a.label || a.option_id);
+  else if (a.option_id) bits.push((a.label || a.option_id) + (a.level ? ' · ' + a.level : ''));
   else if (a.probable_cause) bits.push(`${a.probable_cause} → ${a.recommended_option} (conf. ${a.confidence})`);
   else if (a.detail) bits.push(a.detail);
   else if (a.step) bits.push(`${a.step}: ${a.check || ''}`);
+  else if (a.clock) bits.push(`${a.clock} ${a.elapsed_pct != null ? a.elapsed_pct + '%' : ''} ${a.escalated_to ? '→ ' + a.escalated_to : ''}${a.billing_manager_notified ? ' + Billing Manager' : ''}`);
+  else if (a.priority) bits.push(`${(e.before || {}).priority || ''} → ${a.priority}`);
   else if (a.mode) bits.push(`${a.mode} ${a.amount != null ? fmtMoney(a.amount) : ''}`);
-  else if (a.amount != null) bits.push(fmtMoney(a.amount));
+  else if (a.type) bits.push(`${a.type} ${a.priority || ''} ${a.doa_level ? 'DoA ' + a.doa_level : ''} ${a.amount != null ? fmtMoney(a.amount) : ''}`);
+  if (a.closure_code) bits.push(a.closure_code);
   if (e.reason) bits.push('“' + e.reason + '”');
-  return esc(bits.join(' · ')).slice(0, 400);
+  return esc(bits.join(' · ')).slice(0, 420);
 }
 function feedTable(events, compact) {
   if (!events.length) return '<div class="empty">No events yet.</div>';
-  return `<div class="table-wrap"><table class="grid compact"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Object</th>${compact ? '' : '<th>Scenario</th>'}<th>Detail</th></tr></thead><tbody>
-    ${events.map(e => `<tr class="feed-row${e.case_id ? ' clickable' : ''}"${e.case_id && can('case_detail') ? ` data-goto-case="${esc(e.case_id)}"` : ''}>
+  return `<div class="table-wrap"><table class="grid compact"><thead><tr><th>When (local)</th><th>Who</th><th>What</th><th>Object</th>${compact ? '' : '<th>Scenario</th>'}<th>Detail</th></tr></thead><tbody>
+    ${events.map(e => `<tr class="feed-row${e.ticket_id ? ' clickable' : ''}"${e.ticket_id ? ` data-goto-ticket="${esc(e.ticket_id)}"` : ''}>
       <td class="num" style="white-space:nowrap">${esc(fmtLocal(e.timestamp_local))}</td><td style="white-space:nowrap">${eventWho(e)}</td>
-      <td><span class="mono">${esc(e.action)}</span></td><td class="mono" style="white-space:nowrap">${esc(e.case_id || e.object_id || '')}</td>
+      <td><span class="mono">${esc(e.action)}</span></td><td class="mono" style="white-space:nowrap">${esc(e.ticket_id || e.object_id || '')}</td>
       ${compact ? '' : `<td class="mono">${esc(e.scenario_id || '—')}</td>`}<td>${eventDetail(e)}</td></tr>`).join('')}</tbody></table></div>`;
 }
+function impactText(i) {
+  if (!i) return '—';
+  switch (i.kind) {
+    case 'DRAFT_BILL': return `<span class="impact">${fmtMoney(i.before)}<span class="arrow">→</span><span class="after">${i.action === 'CANCEL' ? 'cancelled' : fmtMoney(i.after)}</span></span>${i.reduction ? ` <span class="sub-line">−${fmtMoney(i.reduction)}${i.fixed_retained ? ` · fixed ${fmtMoney(i.fixed_retained)} retained` : ''}</span>` : ''}`;
+    case 'CREDIT': return `<span class="impact">credit <span class="after">${fmtMoney(i.credit)}</span></span><span class="sub-line">${esc(i.bill_ids.join(', '))} · GL ${esc(i.gl_period || '')}</span>`;
+    case 'ACCOUNT': return `<span class="impact">stop SA effective ${esc(i.stop_effective)}</span><span class="sub-line">protects the next bill</span>`;
+    default: return '<span class="faint">no financial change</span>';
+  }
+}
 
+/* ---------- Dashboard ---------- */
 SCREENS.dashboard = {
   live: true,
   load: () => api('/api/dashboard?feed=' + S.feed),
   render(d) {
     const k = d.kpis, sc = d.scenario;
     const counts = k.counts ? `${k.counts.PASSED} / ${k.counts.HELD} / ${k.counts.NON_BLOCKING}` : '—';
-    const open = Object.entries(k.by_state).filter(([s, n]) => n && !['RESOLVED', 'CLOSED_NO_ACTION'].includes(s)).map(([s, n]) => `${n} ${s.replace(/_/g, ' ').toLowerCase()}`).join(', ');
+    const open = Object.entries(k.by_state).filter(([s, n]) => n && !DONE.includes(s)).map(([s, n]) => `${n} ${s.replace(/_/g, ' ').toLowerCase()}`).join(', ');
+    const prio = Object.entries(k.by_priority).map(([p, n]) => `${p} ${n}`).join(' · ');
     const max = Math.max(1, ...Object.values(k.by_state));
-    const funnel = Object.entries(k.by_state).map(([s, n]) => `<div class="f-row${n ? '' : ' zero'}"><span>${esc(s.replace(/_/g, ' '))}</span><div class="f-track"><div class="f-bar" style="width:${(n / max) * 100}%;${!n ? '' : s === 'RETURNED_TO_DRI' ? 'background:var(--high)' : s === 'RESOLVED' ? 'background:var(--pass)' : s === 'CLOSED_NO_ACTION' ? 'background:var(--faint)' : ''}"></div></div><b class="num">${n}</b></div>`).join('');
-    const mw = S.me.role === 'AUDITOR' ? '<div class="muted-box">No actions required — read-only role.</div>' : d.mywork.length ? workTable(d.mywork, true) : '<div class="muted-box">Nothing is waiting on you in this scenario.</div>';
-    const fb = v => `<button type="button" data-feed="${v}" aria-pressed="${S.feed === v}">${{ mine: 'Mine', mycases: 'My cases', all: 'All' }[v]}</button>`;
+    const funnel = Object.entries(k.by_state).map(([s, n]) => `<div class="f-row${n ? '' : ' zero'}"><span>${esc(s.replace(/_/g, ' '))}</span><div class="f-track"><div class="f-bar" style="width:${(n / max) * 100}%;${!n ? '' : ['RESOLVED', 'CLOSED'].includes(s) ? 'background:var(--pass)' : s === 'CANCELLED' ? 'background:var(--faint)' : ''}"></div></div><b class="num">${n}</b></div>`).join('');
+    const fb = v => `<button type="button" data-feed="${v}" aria-pressed="${S.feed === v}">${{ mine: 'Mine', mytickets: 'My tickets', all: 'All' }[v]}</button>`;
     return head('Dashboard', scLabel()) + `
-      <section class="kpis">
-        ${kpi('Draft bills in run', k.drafts == null ? '—' : k.drafts, sc.kind === 'REPLAY' ? (d.gate_run ? `${k.released} released` : 'gate not run yet') : 'back-scan scenario (no draft bills)')}
+      <section class="kpis kpis-4">
+        ${kpi('Draft bills in run', k.drafts == null ? '—' : k.drafts, sc.kind === 'REPLAY' ? (d.gate_run ? `${k.released} released` : 'gate not run yet') : 'back-scan scenario')}
         ${kpi('Passed / held / non-blocking', counts, k.counts ? 'pre-bill gate outcomes' : '—', k.counts && k.counts.HELD ? 'warn' : '')}
-        ${kpi('Open cases', k.open_cases, open || `${k.cases_total} case(s) in total`)}
-        ${kpi('$ prevented', fmtMoney(k.prevented_identified), `pre-issue reductions · ${fmtMoney(k.prevented_realized)} released corrected`, 'emph')}
-        ${kpi('$ remediated', fmtMoney(k.remediated_identified), `credits on issued bills · ${fmtMoney(k.remediated_approved)} approved`, 'emph')}
-        ${kpi('Open integration issues', k.open_issues, 'grouped by error signature', k.open_issues ? 'warn' : '')}
+        ${kpi('Open tickets', k.open, open || `${k.total} ticket(s) in total`)}
+        ${kpi('Open by priority', prio, 'P1 highest')}
+        ${kpi('SLA at risk / breached', `${k.sla_at_risk} / ${k.sla_breached}`, '75% warning · 100% escalation', k.sla_breached ? 'warn' : '')}
+        ${kpi('$ prevented', fmtMoney(k.prevented_identified), `pre-issue reductions · ${fmtMoney(k.prevented_realized)} released`, 'emph')}
+        ${kpi('$ remediated', fmtMoney(k.remediated_identified), `credits on issued bills · ${fmtMoney(k.remediated_approved)} Finance-approved`, 'emph')}
+        ${kpi('L0 awaiting DRI review', k.l0_awaiting_review, 'daily digest (compensating control)', k.l0_awaiting_review ? 'warn' : '')}
       </section>
       <div class="grid2">
-        <div class="card"><div class="card-head"><h2>Workflow funnel<span class="count">${k.cases_total} case(s)</span></h2></div><div class="card-body funnel">${funnel}</div></div>
-        <div class="card"><div class="card-head"><h2>My Work<span class="count">${d.mywork.length ? 'top ' + d.mywork.length : ''}</span></h2>${can('mywork') ? '<a class="linkish" href="#/mywork">Open My Work</a>' : ''}</div>${mw}</div>
+        <div class="card"><div class="card-head"><h2>Workflow funnel<span class="count">${k.total} ticket(s)</span></h2></div><div class="card-body funnel">${funnel}</div></div>
+        <div class="card"><div class="card-head"><h2>My Work<span class="count">${d.mywork.length ? 'top ' + d.mywork.length : ''}</span></h2><a class="linkish" href="#/mywork">Open My Work</a></div>${d.mywork.length ? workTable(d.mywork, true) : '<div class="muted-box">Nothing is waiting on you in this scenario.</div>'}</div>
       </div>
       <div class="card"><div class="card-head"><h2>Audit feed<span class="count">latest 25 · auto-refreshing</span></h2>
-        <div class="tools"><div class="chip-filter">${fb('mine')}${fb('mycases')}${fb('all')}</div>${can('audit') ? '<a class="linkish" href="#/audit">Full audit log</a>' : ''}</div></div>
+        <div class="tools"><div class="chip-filter">${fb('mine')}${fb('mytickets')}${fb('all')}</div><a class="linkish" href="#/audit">Full audit log</a></div></div>
         ${feedTable(d.feed, true)}</div>`;
   },
 };
-
 function workTable(items, compact) {
-  return `<div class="table-wrap"><table class="grid compact"><thead><tr><th>Age</th><th>Item</th><th>Customer</th><th class="r">Amount at stake</th><th>Next action</th></tr></thead><tbody>
-    ${items.map(i => `<tr class="clickable" data-work='${esc(JSON.stringify({ kind: i.kind, case_id: i.case_id, screen: i.screen }))}'>
-      <td class="num">${esc(fmtAge(i.age))}</td>
-      <td>${i.case_id ? `<span class="mono">${esc(i.case_id)}</span> ${typeBadge(i.case_type)}` : `<span class="pill">${esc(i.kind)}</span>`}${i.state ? `<div class="sub-line">${esc(i.state.replace(/_/g, ' '))}</div>` : ''}</td>
-      <td>${esc(i.customer_name || '')}${i.case_id && i.account_id ? tagFor(i.account_id) : ''}</td>
+  return `<div class="table-wrap"><table class="grid compact"><thead><tr><th>Priority</th><th>SLA</th><th>Item</th><th>Customer</th><th class="r">Amount</th><th>Next action</th></tr></thead><tbody>
+    ${items.map(i => `<tr class="clickable" data-work='${esc(JSON.stringify({ kind: i.kind, ticket_id: i.ticket_id, screen: i.screen }))}'>
+      <td>${prioBadge(i.priority)}</td><td>${i.sla ? slaBadge({ resolve: i.sla, worst: i.sla_worst }, compact) : i.flagged ? '<span class="sla sla-bad">flagged</span>' : ''}</td>
+      <td>${i.ticket_id ? `<span class="mono">${esc(i.ticket_id)}</span> ${typeBadge(i.type)}${i.returned ? ' <span class="pill">returned</span>' : ''}` : `<span class="pill">${esc(i.kind)}</span>`}${i.state ? `<div class="sub-line">${esc(i.state.replace(/_/g, ' '))}${i.doa_level ? ' · DoA ' + esc(i.doa_level) : ''}</div>` : ''}</td>
+      <td>${esc(i.customer_name || '')}${i.account_id ? tagFor(i.account_id) : ''}</td>
       <td class="r num">${i.amount != null ? fmtMoney(i.amount) : ''}</td><td><b>${esc(i.next_action)}</b></td></tr>`).join('')}</tbody></table></div>`;
 }
 SCREENS.mywork = {
   live: true,
   load: () => api('/api/mywork'),
   render(d) {
-    if (d.role === 'AUDITOR') return head('My Work', 'Read-only role') + `<div class="panel"><h2>No actions required — read-only role</h2><p>The Auditor can view every screen and use the <a class="linkish" href="#/audit">audit log</a> (export and integrity verification).</p></div>`;
-    return head('My Work', `Items waiting on <b>${esc(ROLE_LABEL[S.me.role])}</b> in ${esc(S.scId)}`) +
-      `<div class="card">${d.items.length ? workTable(d.items) : '<div class="empty">Nothing is waiting on you in this scenario. Try another scenario in the header.</div>'}</div>`;
+    return head('My Work', `Items waiting on <b>${esc(PERSONA_LABEL[S.me.persona])}</b> in ${esc(S.scId)} · sorted by priority, then SLA`) +
+      `<div class="card">${d.items.length ? workTable(d.items) : '<div class="empty">Nothing is waiting on you in this scenario.</div>'}</div>`;
   },
 };
 
+/* ---------- Bill Run ---------- */
 SCREENS.billrun = {
   live: true,
   load: () => api('/api/gate'),
   render(d) {
     const sc = d.scenario, canAct = lvl('billrun') === 'A';
-    if (sc.kind !== 'REPLAY') return head('Bill Run', scLabel()) + `<div class="panel"><h2>No bill run in this scenario</h2><p>${esc(sc.label)} remediates bills that were already issued. Use the <a class="linkish" href="#/backscan">Back-scan</a> screen to send findings to the workflow, or pick a RUN_… replay in the header.</p></div>`;
-    const rules = Object.entries({ G1: 'Bill covers post-disconnect days (disconnect day billable; ends day before reconnect)', G2: 'Post-disconnect days carry ESTIMATED reads', G3: 'SA ACTIVE despite STOP_SERVICE / MOVE_OUT', G4: 'Integration message ERROR / SKIPPED / UNPROCESSED', G5: 'Unmatched disconnect near-matches this premise', G6: 'Actual kWh after disconnect on stopped SA / disconnected meter (revenue protection)' })
+    if (sc.kind !== 'REPLAY') return head('Bill Run', scLabel()) + `<div class="panel"><h2>No bill run in this scenario</h2><p>${esc(sc.label)} remediates bills already issued. Use <a class="linkish" href="#/backscan">Back-scan</a> to send findings to the workflow, or pick a RUN_… replay in the header.</p></div>`;
+    const rules = Object.entries({ G1: 'Completed disconnect and the draft covers days after it (disconnect day billable; window ends the day before any reconnect) — hold', G2: 'Post-disconnect days carry ESTIMATED reads — hold', G3: 'SA still ACTIVE at bill-run time despite STOP_SERVICE / MOVE_OUT — ticket', G4: 'Integration message ERROR / SKIPPED / UNPROCESSED — ticket + root-cause register', G5: "Unmatched disconnect's premise is one character from this bill's premise — hold" })
       .map(([g, t]) => `<dt><span class="rule">${g}</span></dt><dd>${esc(t)}</dd>`).join('');
     if (!d.gate) return head('Bill Run', scLabel()) + `<div class="card"><div class="card-head"><h2>Pre-bill gate — ${esc(sc.run_ts)}</h2></div><div class="card-body">
-      <p>The draft bills are the rows in <span class="mono">ccb_bill_segments.csv</span> with <span class="mono">bill_run_at = ${esc(sc.run_ts)}</span>, treated as not yet issued. The gate sees only records that existed at the scenario time.</p>
-      <dl class="kv">${rules}</dl>
-      <p><b>HELD</b> if G1, G2 or G5 fired · <b>NON-BLOCKING</b> if only G3/G4 (bill passes, ADVANCE case) · G6 opens a REVENUE_PROTECTION case.</p>
-      ${canAct ? '<button class="btn primary" data-action="run-gate" type="button">Run gate</button>' : `<p class="note">Only Billing Ops can run the gate.</p>`}</div></div>`;
-    const g = d.gate;
-    const f = S.billFilter || 'ALL';
-    const order = { HELD: 0, NON_BLOCKING: 1, PASSED: 2 };
+      <p>Draft bills are the <span class="mono">ccb_bill_segments.csv</span> rows with <span class="mono">bill_run_at = ${esc(sc.run_ts)}</span>, treated as not yet issued. The gate sees only records that existed at scenario time. SLA clocks start now, as if the bill run happened today.</p>
+      <dl class="kv">${rules}</dl><p><b>HELD</b>: G1, G2 or G5 · <b>NON-BLOCKING</b>: only G3/G4 (ADVANCE ticket) · usage after disconnect that was not billed is out of scope.</p>
+      ${canAct ? '<button class="btn primary" data-action="run-gate" type="button">Run gate</button>' : '<p class="note">Only the Billing Ops Analyst runs the gate.</p>'}</div></div>`;
+    const g = d.gate, f = S.billFilter || 'ALL', order = { HELD: 0, NON_BLOCKING: 1, PASSED: 2 };
     const bills = g.bills.filter(b => f === 'ALL' || b.outcome === f).sort((a, b) => order[a.outcome] - order[b.outcome] || a.bill_id.localeCompare(b.bill_id));
-    const unreleasedPassed = g.bills.filter(b => b.outcome !== 'HELD' && !b.released).length;
+    const unrel = g.bills.filter(b => b.outcome !== 'HELD' && !b.released).length;
     const fb = v => `<button type="button" data-billfilter="${v}" aria-pressed="${f === v}">${v === 'ALL' ? 'All' : v.replace('_', '-').toLowerCase()} (${v === 'ALL' ? g.bills.length : g.counts[v]})</button>`;
     const rows = bills.map(b => {
-      const caseIds = b.case_ids || [];
-      const caseHtml = caseIds.map(c => `${caseLink(c)} ${b.case_states && b.case_states[c] ? stateBadge(b.case_states[c]) : ''}`).join('<br>');
-      const ready = caseIds.some(c => b.case_states && b.case_states[c] === 'READY_TO_RELEASE');
+      const tix = (b.ticket_ids || []).map(t => `${ticketLink(t)} ${b.ticket_states && b.ticket_states[t] ? stateBadge(b.ticket_states[t]) : ''}`).join('<br>');
+      const ready = (b.ticket_ids || []).find(t => b.ticket_states && b.ticket_states[t] === 'READY_TO_RELEASE');
       let rel;
-      if (b.released) rel = `<span class="badge st-SUCCESS">RELEASED</span><div class="sub-line">${esc(b.release.mode)} ${b.release.mode === 'CANCELLED' ? '' : fmtMoney(b.release.amount)}</div>`;
+      if (b.released) rel = `<span class="badge st-SUCCESS">${b.release.mode === 'CANCELLED' ? 'CANCELLED' : 'RELEASED'}</span><div class="sub-line">${esc(b.release.mode)} ${b.release.mode === 'CANCELLED' ? '' : fmtMoney(b.release.amount)}</div>`;
       else if (b.outcome !== 'HELD') rel = '<span class="faint">ready</span>';
-      else if (ready && canAct) rel = `<button class="btn sm primary" data-release="${esc(b.bill_id)}" type="button">Release</button>`;
-      else rel = `<span class="faint">held</span>`;
+      else if (ready && canAct) rel = `<button class="btn sm primary" data-ticket-release="${esc(ready)}" type="button">Release / confirm</button>`;
+      else rel = '<span class="faint">held</span>';
       return `<tr><td class="mono">${esc(b.bill_id)}<div class="sub-line">${esc(b.bill_type)}</div></td><td>${esc(b.customer_name)}${tagFor(b.account_id)}<div class="sub-line mono">${esc(b.account_id)}</div></td>
-        <td class="num">${esc(b.period_start)} → ${esc(b.period_end)}</td><td class="r num">${fmtMoney(b.total)}</td><td>${outcomeBadge(b.outcome)}</td><td>${gateTags(b.rules)}</td>
-        <td>${caseHtml || '<span class="faint">—</span>'}</td><td>${rel}</td></tr>`;
+        <td class="num">${esc(b.period_start)} → ${esc(b.period_end)}</td><td class="r num">${fmtMoney(b.total)}</td><td>${outcomeBadge(b.outcome)}</td><td>${gateTags(b.rules)}</td><td>${tix || '<span class="faint">—</span>'}</td><td>${rel}</td></tr>`;
     }).join('');
-    return head('Bill Run', scLabel(), canAct ? `<button class="btn primary" data-action="release-passed" type="button"${unreleasedPassed ? '' : ' disabled'}>Release all passed (${unreleasedPassed})</button>` : '') + `
-      <section class="kpis">
-        ${kpi('Draft bills', g.bills.length, 'run ' + g.run_ts)}${kpi('Passed', g.counts.PASSED, 'no rule fired')}${kpi('Held', g.counts.HELD, 'G1 / G2 / G5', g.counts.HELD ? 'warn' : '')}
-        ${kpi('Non-blocking', g.counts.NON_BLOCKING, 'G3 / G4 only → ADVANCE case')}${kpi('Gate run by', (S.users.find(u => u.user_id === g.run_by) || {}).name || g.run_by, fmtLocal(g.run_at))}
-        ${kpi('Released', g.bills.filter(b => b.released).length, 'of ' + g.bills.length)}
-      </section>
-      ${d.inject_failure ? '<div class="banner warn"><div class="b-text"><b>Demo:</b> the next execution step will fail (inject failure is armed).</div></div>' : ''}
+    return head('Bill Run', scLabel(), canAct ? `<button class="btn primary" data-action="release-passed" type="button"${unrel ? '' : ' disabled'}>Release all passed (${unrel})</button>` : '') + `
+      <section class="kpis">${kpi('Draft bills', g.bills.length, 'run ' + g.run_ts)}${kpi('Passed', g.counts.PASSED, 'no rule fired')}${kpi('Held', g.counts.HELD, 'G1 / G2 / G5', g.counts.HELD ? 'warn' : '')}
+        ${kpi('Non-blocking', g.counts.NON_BLOCKING, 'G3 / G4 only → ADVANCE')}${kpi('Gate run', fmtLocal(g.run_at), 'by ' + ((S.users.find(u => u.user_id === g.run_by) || {}).name || g.run_by))}${kpi('Released', g.bills.filter(b => b.released).length, 'of ' + g.bills.length)}</section>
+      ${d.inject_failure ? '<div class="banner warn"><div class="b-text"><b>Demo:</b> the next execution step will fail (inject failure armed).</div></div>' : ''}
       <div class="card"><div class="card-head"><h2>Draft bills</h2><div class="tools"><div class="chip-filter">${fb('ALL')}${fb('HELD')}${fb('NON_BLOCKING')}${fb('PASSED')}</div></div></div>
-        <div class="table-wrap"><table class="grid"><thead><tr><th>Bill</th><th>Customer</th><th>Period</th><th class="r">Total</th><th>Outcome</th><th>Rules</th><th>Case</th><th>Release</th></tr></thead><tbody>${rows}</tbody></table></div>
-        <div class="card-foot">A held bill can be released only when its case is READY_TO_RELEASE (corrected and verified, or the DRI chose “Release as-is” with a reason).</div></div>
-      <div class="card"><details class="legend"><summary>Gate rules</summary><div class="legend-grid"><dl>${rules}</dl></div></details></div>`;
+        <div class="table-wrap"><table class="grid"><thead><tr><th>Bill</th><th>Customer</th><th>Period</th><th class="r">Total</th><th>Outcome</th><th>Rules</th><th>Ticket</th><th>Release</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="card-foot">A held bill can be released only from READY_TO_RELEASE, and only by the Analyst (SoD-3).</div></div>
+      <div class="card"><details class="legend"><summary>Gate rules (workflow_rules.md §3)</summary><div class="legend-grid"><dl>${rules}</dl></div></details></div>`;
   },
 };
 
-SCREENS.cases = {
+/* ---------- Tickets list ---------- */
+SCREENS.tickets = {
   live: true,
-  load: () => api('/api/cases'),
+  load: () => api('/api/tickets'),
   render(d) {
-    const rows = d.cases.map(c => `<tr class="clickable" data-goto-case="${esc(c.case_id)}">
-      <td class="mono">${esc(c.case_id)}</td><td>${typeBadge(c.case_type)}</td><td>${stateBadge(c.state)}${c.owner_role ? `<div class="sub-line">waiting on ${esc(ROLE_LABEL[c.owner_role])}</div>` : ''}</td>
-      <td>${esc(c.customer_name)}${tagFor(c.account_id)}<div class="sub-line mono">${esc(c.account_id)}</div></td><td>${gateTags(c.gates)}</td>
-      <td class="r num">${fmtMoney(c.amount_at_stake || 0)}</td>
-      <td>${c.probable_cause ? `<b>${esc(c.probable_cause)}</b>` : c.investigation_error ? '<span class="badge sev-HIGH">GUARDRAIL</span>' : AGENT_STATES.includes(c.state) ? '<span class="spinner"></span>' : '—'}</td>
-      <td>${esc(c.recommended_option || '')}</td><td class="r num">${c.confidence != null ? c.confidence.toFixed(2) : ''}</td></tr>`).join('');
-    return head('Cases', scLabel()) + `<div class="card">${d.cases.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Case</th><th>Type</th><th>State</th><th>Customer</th><th>Gates</th><th class="r">At stake</th><th>Cause</th><th>Recommended</th><th class="r">Conf.</th></tr></thead><tbody>${rows}</tbody></table></div>`
-      : `<div class="empty">No cases in this scenario yet. ${curSc() && curSc().kind === 'REPLAY' ? 'Billing Ops runs the gate on the Bill Run screen.' : 'Billing Ops sends back-scan findings from the Back-scan screen.'}</div>`}</div>`;
+    const rows = d.tickets.map(t => `<tr class="clickable" data-goto-ticket="${esc(t.ticket_id)}">
+      <td class="mono">${esc(t.ticket_id)}</td><td>${typeBadge(t.type)}</td><td>${prioBadge(t.priority)}</td>
+      <td>${stateBadge(t.state)}${DONE.includes(t.state) ? (t.closure_code ? `<div class="sub-line">${esc(t.closure_code)}</div>` : '') : `<div class="sub-line">with ${esc(PERSONA_LABEL[t.assignee_persona] || t.assignee_persona)}</div>`}</td>
+      <td>${DONE.includes(t.state) ? '' : slaBadge({ resolve: t.sla_resolve, worst: t.sla_worst }, true)}</td><td>${doaBadge(t.doa_level)}</td>
+      <td>${esc(t.customer_name)}${tagFor(t.account_id)}<div class="sub-line mono">${esc(t.account_id)}</div></td>
+      <td class="r num">${fmtMoney(t.amount || 0)}</td><td>${t.probable_cause ? `<b>${esc(t.probable_cause)}</b>` : t.investigation_error ? '<span class="badge sev-HIGH">GUARDRAIL</span>' : AGENT_STATES.includes(t.state) ? '<span class="spinner"></span>' : '—'}</td>
+      <td>${esc(t.recommended || '')}</td><td>${gateTags(t.gates)} ${(t.flag || []).length ? '<span class="pill" title="Open dispute / regulatory complaint">flag</span>' : ''}${t.returned ? ' <span class="pill">returned</span>' : ''}${t.match ? ` <span class="pill">ID match ${esc(t.match.status.toLowerCase())}</span>` : ''}</td></tr>`).join('');
+    return head('Tickets (BEX)', scLabel() + ' · every ticket is owned by the DRI') + `<div class="card">${d.tickets.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Ticket</th><th>Type</th><th>Prio</th><th>State</th><th>SLA</th><th>DoA</th><th>Customer</th><th class="r">Amount</th><th>Cause</th><th>Recommended</th><th>Flags</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : `<div class="empty">No tickets in this scenario yet. ${curSc() && curSc().kind === 'REPLAY' ? 'The Analyst runs the gate on Bill Run.' : 'The Analyst sends findings from Back-scan.'}</div>`}</div>`;
   },
 };
 
-/* ---------- Role queues ---------- */
-const QUEUE_INFO = {
-  masterdata: ['Master data tasks', 'Confirm or reject suggested premise matches (G5).'],
-  field: ['Field tasks', 'Record what the field visit found.'],
-  finance: ['Finance approvals', 'Credits on issued bills and reductions of $1,000 or more need approval; credit memos post to an OPEN GL period.'],
-  regulatory: ['Regulatory review', 'Accounts with an open billing dispute or regulatory complaint: approve or edit the drafted customer letter and regulator response.'],
-};
+/* ---------- Ticket detail ---------- */
+function statesLine(t) {
+  const seen = new Set(t.history.map(h => h.to));
+  const cur = T_STATES.indexOf(t.state);
+  const lastSeen = Math.max(...[...seen].map(s => T_STATES.indexOf(s)));
+  const optional = ['PENDING_FINANCE', 'COMMS_APPROVAL', 'READY_TO_RELEASE', 'PLAN_APPROVAL', 'IN_PROGRESS', 'VERIFYING'];
+  const chips = T_STATES.map((s, i) => `<span class="${s === t.state ? 'cur' : seen.has(s) ? 'done' : (optional.includes(s) && i < lastSeen) ? 'skip' : ''}">${esc(s.replace(/_/g, ' ').toLowerCase())}</span>`).join('');
+  return `<div class="states-line" id="statesLine">${chips}${t.state === 'CANCELLED' ? '<span class="cur" style="background:var(--faint);border-color:var(--faint)">cancelled</span>' : ''}${t.returned && t.state === 'AWAITING_DECISION' ? '<span class="cur" style="background:var(--high);border-color:var(--high)">returned</span>' : ''}</div>`;
+}
+function activityPanel(t) {
+  if (S.agent && S.agent.show_agent_activity === false) return '';
+  const working = AGENT_STATES.includes(t.state) || (t.state === 'PLAN_APPROVAL' && !t.plan);
+  const who = ['NEW', 'INVESTIGATING'].includes(t.state) ? 'Investigation agent is working' : t.state === 'VERIFYING' ? 'Verifier is re-running the gate' : 'Execution agent is working';
+  const rows = (t.activity || []).slice().reverse().map(a => `<div class="a-row${a.ok ? '' : ' bad'}"><span class="a-n">${a.n}</span><span class="a-tool">${esc(a.tool)}<span class="a-agent">${esc(a.agent)}</span></span><span>${esc(a.summary)}<span class="a-args">${esc(a.args)}</span></span></div>`).join('');
+  return `<div class="card" id="activityPanel"><div class="card-head"><h2>Agent activity<span class="count">${(t.activity || []).length} tool call(s) · mock (scripted)</span></h2></div>
+    ${working ? `<div class="working"><span class="spinner"></span> ${who}…</div>` : ''}<div class="activity">${rows || '<div class="empty">No agent activity yet.</div>'}</div></div>`;
+}
 function readsTable(rs, dd) {
   if (!rs || !rs.length) return '<span class="faint">no reads</span>';
   return `<table class="grid compact"><thead><tr><th>Read</th><th>Date</th><th class="r">kWh</th><th>Quality</th></tr></thead><tbody>${rs.map(r => `<tr${r.read_date > dd ? ' style="font-weight:600"' : ''}><td class="mono">${esc(r.read_id)}</td><td class="num">${esc(r.read_date)}${r.read_date === dd ? ' <span class="pill">disconnect day</span>' : ''}</td><td class="r num">${esc(r.kwh)}</td><td>${r.read_quality === 'ESTIMATED' ? '<span class="badge sev-MEDIUM">ESTIMATED</span>' : esc(r.read_quality)}</td></tr>`).join('')}</tbody></table>`;
 }
-function queueItem(screen, c) {
-  const open = c.open && c.allowed_actions && c.allowed_actions.length;
-  const t = c.task_context || {};
-  const title = `<div class="card-head"><h2><span class="mono">${esc(c.case_id)}</span> ${typeBadge(c.case_type)} ${esc(c.customer_name)}${tagFor(c.account_id)}</h2><div class="tools">${stateBadge(c.state)} ${can('case_detail') ? caseLink(c.case_id, 'Open case') : ''}</div></div>`;
-  let body = '', form = '';
-  if (screen === 'masterdata') {
-    body = `<div class="compare"><div class="cbox"><div class="form-label">OMS premise as recorded (${esc(c.root_wo_id)})</div><b>${esc(c.unmatched_premise)}</b><div class="note">not in ref_id_crosswalk</div></div>
-      <div class="vs">→</div><div class="cbox"><div class="form-label">Suggested crosswalk match</div><b>${esc(c.suggested_premise)}</b>
-      <div class="note">SA ${esc((t.sa || {}).sa_id)} (${esc((t.sa || {}).sa_status)}) · meter ${esc(c.meter_id)} · ${esc((t.sa || {}).premise_address || '')}</div></div></div>
-      <div class="form-row"><span class="form-label">Read-timing evidence on meter ${esc(c.meter_id)} around the disconnect (${esc(c.disconnect_date)})</span>${readsTable(t.reads_around_disconnect, c.disconnect_date)}</div>
-      ${c.master_data ? `<p><b>${esc(c.master_data.outcome)}</b> by ${esc(c.master_data.by)} ${c.master_data.note ? '— “' + esc(c.master_data.note) + '”' : ''}</p>` : ''}`;
-    if (open) form = `<div class="form-row"><label>Note / reason (required to reject)</label><textarea class="input f-reason" data-track></textarea></div>
-      <div class="btn-row"><button class="btn primary" data-act="CONFIRM_MATCH" type="button">Confirm match</button><button class="btn danger" data-act="REJECT_MATCH" type="button">Reject match</button></div>`;
-  } else if (screen === 'field') {
-    body = `<dl class="kv"><dt>Premise</dt><dd class="mono">${esc(c.premise)} · meter ${esc(c.meter_id)}</dd><dt>Disconnect</dt><dd>${esc(c.root_wo_id)} ${esc(c.wo_subtype)} on ${esc(c.disconnect_date)}</dd>
-      <dt>Gates</dt><dd>${gateTags(c.gates)}</dd><dt>Why</dt><dd>${esc(c.summary || (c.investigation || {}).summary || '')}</dd></dl>
-      <div class="form-row"><span class="form-label">Reads around the disconnect</span>${readsTable(t.reads_around_disconnect, c.disconnect_date)}</div>
-      ${c.field_outcome ? `<p><b>${esc(c.field_outcome.outcome)}</b> recorded by ${esc(c.field_outcome.by)} ${c.field_outcome.note ? '— “' + esc(c.field_outcome.note) + '”' : ''}</p>` : ''}`;
-    if (open) form = `<div class="form-row"><label>Outcome</label><select class="input f-outcome"><option value="DISCONNECT_CONFIRMED">Disconnect confirmed</option><option value="SERVICE_FOUND_CONNECTED">Service found connected</option><option value="METER_FAULT">Meter fault</option><option value="SUSPECTED_TAMPER">Suspected tamper</option></select></div>
-      <div class="form-row"><label>Note</label><textarea class="input f-reason" data-track></textarea></div><div class="btn-row"><button class="btn primary" data-act="FIELD_OUTCOME" type="button">Record outcome</button></div>`;
-  } else if (screen === 'finance') {
-    const e = c.expected || {};
-    body = `<dl class="kv"><dt>Amount</dt><dd><b class="num">${fmtMoney(c.amount_at_stake)}</b> ${c.case_type === 'PREVENT' ? '(reduction of a held draft)' : '(credit memo on issued bills)'}</dd>
-      <dt>GL period</dt><dd>${esc(e.gl_period || '— (draft corrected before issue)')}</dd><dt>Bills affected</dt><dd class="mono">${esc([c.draft_bill_id].concat(c.issued_bill_ids || []).filter(Boolean).join(', '))}</dd>
-      <dt>Decision</dt><dd>${esc((c.decision || {}).label || '—')} by ${esc((c.decision || {}).by || '—')}</dd><dt>Cause</dt><dd>${esc((c.investigation || {}).probable_cause_label || '')}</dd></dl>
-      ${c.finance ? `<p><b>${esc(c.finance.outcome)}</b> by ${esc(c.finance.by)} ${c.finance.note ? '— “' + esc(c.finance.note) + '”' : ''}</p>` : ''}`;
-    if (open) form = `<div class="form-row"><label>Comment / reason (required to reject)</label><textarea class="input f-reason" data-track></textarea></div>
-      <div class="btn-row"><button class="btn primary" data-act="FINANCE_APPROVE" type="button">Approve ${fmtMoney(c.amount_at_stake)}</button><button class="btn danger" data-act="FINANCE_REJECT" type="button">Reject</button></div>`;
-  } else if (screen === 'regulatory') {
-    const cm = c.comms || {};
-    const ro = !open;
-    body = `<p class="note">Open CRM cases: ${esc((c.regulatory_crm_cases || []).join(', ') || '—')} · ${cm.edits && cm.edits.length ? cm.edits.length + ' edit(s) logged' : 'no edits yet'}</p>
-      <div class="form-row"><label>Customer letter</label><textarea class="input letter-edit f-letter" data-track${ro ? ' readonly' : ''}>${esc(cm.customer_letter || '')}</textarea></div>
-      <div class="form-row"><label>Regulator response</label><textarea class="input letter-edit f-response" data-track${ro ? ' readonly' : ''}>${esc(cm.regulator_response || '')}</textarea></div>`;
-    if (open) form = `<div class="form-row"><label>Comment / reason (required to reject)</label><textarea class="input f-reason" data-track></textarea></div>
-      <div class="btn-row"><button class="btn" data-act="EDIT_COMMS" type="button">Save edits</button><button class="btn primary" data-act="APPROVE_COMMS" type="button">Approve communications</button><button class="btn danger" data-act="REJECT_COMMS" type="button">Reject (return to DRI)</button></div>`;
+function matchPanel(t, editable) {
+  if (!t.match) return '';
+  const m = t.match;
+  return `<div class="compare"><div class="cbox"><div class="form-label">OMS premise as recorded (${esc(t.root_wo_id)})</div><b>${esc(t.unmatched_premise)}</b><div class="note">not in ref_id_crosswalk</div></div>
+      <div class="vs">→</div><div class="cbox"><div class="form-label">Suggested crosswalk match</div><b>${esc(t.suggested_premise)}</b><div class="note">SA ${esc(t.sa_id)} · meter ${esc(t.meter_id)} · ${esc(t.customer_name)}</div></div></div>
+    <div class="form-row"><span class="form-label">Evidence: reads on meter ${esc(t.meter_id)} around the unmatched disconnect (${esc(t.disconnect_date)})</span>${readsTable(t.reads_around_disconnect, t.disconnect_date)}</div>
+    ${m.status !== 'PENDING' ? `<p><b>Match ${esc(m.status)}</b> by ${esc(uname(m.by))} at ${esc(fmtLocal(m.at))} — “${esc(m.note)}”</p>` : ''}
+    ${editable ? `<div class="form-row"><label>Evidence note (required)</label><textarea class="input f-note" data-track placeholder="e.g. O/0 look-alike; candidate meter turns ESTIMATED the day after the disconnect"></textarea></div>
+      <div class="btn-row"><button class="btn primary" data-act="CONFIRM_MATCH" type="button">Confirm match</button><button class="btn danger" data-act="REJECT_MATCH" type="button">Reject match</button></div>` : ''}`;
+}
+function optionsRadio(t, allowOverride) {
+  const inv = t.investigation || {};
+  const imp = Object.fromEntries((inv.options || []).map(o => [o.option_id, o.expected_financial_impact]));
+  const rec = inv.recommended_option, rejected = t.match && t.match.status === 'REJECTED';
+  return `<div class="opt-list">${(t.playbook || { options: [] }).options.map(o => {
+    const override = o.option_id !== rec;
+    const disabled = (rejected && o.terminal !== 'RELEASE_AS_IS') || (o.requires_match_confirmed && t.match && t.match.status !== 'CONFIRMED') || (override && !allowOverride);
+    const checked = (rejected ? o.terminal === 'RELEASE_AS_IS' : o.option_id === rec) && !disabled;
+    return `<label class="${o.option_id === rec ? 'rec' : ''}"><input type="radio" name="opt" value="${esc(o.option_id)}"${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}>
+      <span><span class="o-label">${esc(o.label)}</span>${o.option_id === rec ? ' <span class="pill">★ recommended</span>' : ' <span class="pill">override — DRI + reason</span>'}
+      <span class="o-sub" style="display:block">${impactText(imp[o.option_id])}${o.terminal === 'DEFER' ? ' · bill stays held until the next run' : ''}${disabled ? ' · not available' : ''}</span></span></label>`; }).join('')}</div>`;
+}
+function actionPanel(t) {
+  const a = t.allowed_actions || [], out = [];
+  const reason = (lbl, cls) => `<div class="form-row"><label>${esc(lbl)}</label><textarea class="input ${cls || 'f-reason'}" data-track></textarea></div>`;
+  if (a.includes('CONFIRM_MATCH')) out.push(`<h4>ID match (G5) — confirm or reject before the ticket can leave triage</h4>${matchPanel(t, true)}`);
+  if (a.includes('CONFIRM_TRIAGE')) {
+    const inv = t.investigation || {}, rec = inv.recommended_option;
+    const l0 = t.doa_level === 'L0';
+    out.push(`<h4>Triage</h4><p class="note">Confirm the finding and propose the resolution. ${l0 ? '<b>This ticket is within L0</b> (amount under $50, recommended option, no flag): you may decide it alone; it then appears in the DRI digest.' : `DoA <b>${esc(t.doa_level)}</b>: the ${t.doa_level === 'L2' ? 'DRI decides, then Finance approves' : 'DRI decides'}.`}</p>
+      <div class="form-row"><label>Proposed option</label><select class="input f-proposed">${(t.playbook || { options: [] }).options.map(o => `<option value="${esc(o.option_id)}"${o.option_id === (t.match && t.match.status === 'REJECTED' ? 'RELEASE_AS_IS' : rec) ? ' selected' : ''}>${esc(o.label)}${o.option_id === rec ? ' (recommended)' : ''}</option>`).join('')}</select></div>
+      ${reason('Triage note (optional)')}${l0 ? '<label class="switch" style="margin:6px 0"><input type="checkbox" class="f-decide" checked><span class="track"></span><span>Decide now with the recommended option (L0)</span></label>' : ''}
+      <div class="btn-row"><button class="btn primary" data-act="CONFIRM_TRIAGE" type="button">Confirm triage</button></div>`);
   }
-  return `<div class="card${open ? ' action-panel' : ''}" data-case="${esc(c.case_id)}">${title}<div class="card-body">${body}${form}</div></div>`;
-}
-for (const qs of ['masterdata', 'field', 'finance', 'regulatory']) {
-  SCREENS[qs] = {
-    live: true,
-    load: () => api('/api/queue/' + qs),
-    render(d) {
-      const open = d.items.filter(i => i.open), done = d.items.filter(i => !i.open);
-      return head(QUEUE_INFO[qs][0], QUEUE_INFO[qs][1] + ' · ' + esc(S.scId)) +
-        (open.length ? open.map(c => queueItem(qs, c)).join('') : '<div class="card"><div class="empty">No open tasks in this scenario.</div></div>') +
-        (done.length ? `<h3 class="muted" style="font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin:22px 0 8px">Completed</h3>` + done.map(c => queueItem(qs, c)).join('') : '');
-    },
-  };
-}
-
-SCREENS.integration = {
-  live: true,
-  load: () => api('/api/integration/issues'),
-  render(d) {
-    const canAct = lvl('integration') === 'A';
-    const cards = d.issues.map(i => `<div class="card" data-issue="${esc(i.issue_id)}"><div class="card-head"><h2><span class="mono">${esc(i.issue_id)}</span> ${esc(i.signature)}</h2>
-        <div class="tools"><span class="badge ${i.status === 'RESOLVED' ? 'st-SUCCESS' : i.status === 'ACKNOWLEDGED' ? 'sev-MEDIUM' : 'st-ERROR'}">${esc(i.status)}</span>${i.ticket_ref ? `<span class="pill">${esc(i.ticket_ref)}</span>` : ''}</div></div>
-      <div class="card-body"><dl class="kv"><dt>Messages</dt><dd class="mono">${esc(i.msg_ids.join(', ') || '—')}</dd><dt>Work orders</dt><dd class="mono">${esc(i.wo_ids.join(', '))}</dd>
-        <dt>Affected cases</dt><dd>${i.cases.map(c => `${caseLink(c.case_id)} ${typeBadge(c.case_type)} ${esc(c.customer_name)}${tagFor(c.account_id)} ${stateBadge(c.state)}`).join('<br>')}</dd></dl>
-        ${canAct && i.status !== 'RESOLVED' ? `<div class="btn-row" style="align-items:center"><input class="input f-ticket" data-track placeholder="Ticket reference, e.g. INC-12345" value="${esc(i.ticket_ref)}" style="max-width:260px">
-          <button class="btn" data-issue-act="SET_TICKET" type="button">Save ticket</button>${i.status === 'OPEN' ? '<button class="btn" data-issue-act="ACKNOWLEDGE" type="button">Acknowledge</button>' : ''}
-          <button class="btn primary" data-issue-act="RESOLVE" type="button">Mark root cause fixed</button></div>` : ''}
-        ${i.history.length ? `<p class="note">${i.history.map(h => `${esc(h.action)} by ${esc(h.by)}${h.ticket_ref ? ' (' + esc(h.ticket_ref) + ')' : ''}`).join(' · ')}</p>` : ''}
-        <p class="note">Integration issues never block a case.</p></div></div>`).join('');
-    return head('Integration issues', 'OMS → CC&B field-activity failures grouped by error signature · ' + esc(S.scId)) + (cards || '<div class="card"><div class="empty">No integration issues in this scenario.</div></div>');
-  },
-};
-
-SCREENS.audit = {
-  load: async () => {
-    const f = S.auditF, qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
-    return api('/api/audit?' + qs);
-  },
-  render(d) {
-    const f = S.auditF, isAud = lvl('audit') === 'X';
-    const opt = (vals, cur, all) => `<option value="">${all}</option>` + vals.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
-    const scs = (curDs() || { scenarios: [] }).scenarios.map(s => [s.scenario_id, s.scenario_id]);
-    return head('Audit log', 'Append-only · SHA-256 hash chain · state/audit_log.jsonl', (isAud ? `<button class="btn" data-action="audit-export" type="button">Export CSV</button><button class="btn primary" data-action="audit-verify" type="button">Verify integrity</button>` : '<span class="note">Export and integrity verification: Auditor only</span>')) +
-      `${S.auditVerify ? `<div class="overall ${S.auditVerify.ok ? 'pass' : 'fail'}"><span class="o-big">${S.auditVerify.ok ? '✓ Chain intact' : '✗ Broken link'}</span><span class="o-sub">${S.auditVerify.ok ? `${S.auditVerify.events} events re-hashed; no breaks.` : `First broken link at line ${S.auditVerify.first_broken.line} (${esc(S.auditVerify.first_broken.event_id || '?')}): ${esc(S.auditVerify.first_broken.reason)}`}</span></div>` : ''}
-      <div class="card"><div class="card-body"><div class="grid-filters">
-        <select class="input" data-af="user">${opt(S.users.map(u => [u.user_id, u.name + ' (' + u.role + ')']).concat([['sys.gate', 'Pre-bill gate'], ['agent.investigator', 'Investigation agent'], ['agent.executor', 'Execution agent'], ['sys.verifier', 'Verifier']]), f.user, 'All actors')}</select>
-        <select class="input" data-af="role">${opt(Object.keys(ROLE_LABEL).map(r => [r, ROLE_LABEL[r]]).concat([['AGENT', 'Agents'], ['SYSTEM', 'System']]), f.role, 'All roles')}</select>
-        <select class="input" data-af="action">${opt(d.actions.map(a => [a, a]), f.action, 'All actions')}</select>
-        <select class="input" data-af="scenario">${opt(scs, f.scenario, 'All scenarios')}</select>
-        <input class="input" data-af="case" placeholder="Case id, e.g. WF-1102-01" value="${esc(f.case || '')}">
-        <input class="input" type="date" data-af="from" value="${esc(f.from || '')}" aria-label="From date">
-        <input class="input" type="date" data-af="to" value="${esc(f.to || '')}" aria-label="To date">
-        <input class="input" type="search" data-af="q" placeholder="Free-text search" value="${esc(f.q || '')}">
-      </div><div class="btn-row"><button class="btn primary" data-action="audit-apply" type="button">Apply filters</button><button class="btn" data-action="audit-clear" type="button">Clear</button><span class="note">${d.total.toLocaleString()} matching event(s)${d.total > d.events.length ? ' · newest ' + d.events.length + ' shown' : ''}</span></div></div></div>
-      <div class="card">${feedTable(d.events)}</div>`;
-  },
-};
-
-/* ---------- Case detail ---------- */
-function impactText(i) {
-  if (!i) return '—';
-  switch (i.kind) {
-    case 'DRAFT_BILL': return `<span class="impact">${fmtMoney(i.before)}<span class="arrow">→</span><span class="after">${i.action === 'CANCEL' ? 'cancelled' : fmtMoney(i.after)}</span></span>${i.reduction ? ` <span class="sub-line">−${fmtMoney(i.reduction)}${i.fixed_retained ? ` · fixed ${fmtMoney(i.fixed_retained)} retained` : ''}</span>` : ''}`;
-    case 'CREDIT': return `<span class="impact">credit <span class="after">${fmtMoney(i.credit)}</span></span><span class="sub-line">${esc(i.bill_ids.join(', '))} · GL ${esc(i.gl_period || '')}</span>`;
-    case 'REVENUE_PROTECTION': return `<span class="impact">${fmtKwh(i.unbilled_kwh)} kWh unbilled</span><span class="sub-line">≈ ${fmtMoney(i.unbilled_value)} at tariff</span>`;
-    case 'ACCOUNT': return `<span class="impact">stop SA effective ${esc(i.stop_effective)}</span><span class="sub-line">protects the next bill</span>`;
-    case 'PENDING': return `<span class="impact">${fmtMoney(i.before)} held pending field</span>`;
-    default: return '<span class="faint">no financial change</span>';
+  if (a.includes('CHANGE_PRIORITY')) out.push(`<details class="inline-details"><summary>Adjust priority (one level, reason required)</summary><div class="form-row"><label>Reason</label><textarea class="input f-reason-prio" data-track></textarea></div>
+      <div class="btn-row"><button class="btn sm" data-act="CHANGE_PRIORITY" data-dir="up" type="button">Raise to ${esc(['P1', 'P1', 'P2', 'P3'][['P1', 'P2', 'P3', 'P4'].indexOf(t.priority)])}</button><button class="btn sm" data-act="CHANGE_PRIORITY" data-dir="down" type="button">Lower to ${esc(['P2', 'P3', 'P4', 'P4'][['P1', 'P2', 'P3', 'P4'].indexOf(t.priority)])}</button></div></details>`);
+  if (a.includes('REQUEST_CANCELLATION')) out.push(`<details class="inline-details"><summary>Request false-positive cancellation (DRI approves)</summary>${reason('Why is the gate wrong? (required)', 'f-reason-cancel')}<div class="btn-row"><button class="btn danger sm" data-act="REQUEST_CANCELLATION" type="button">Request cancellation</button></div></details>`);
+  if (t.cancel_request && t.state === 'TRIAGE') out.push(`<p class="note">Cancellation requested by ${esc(uname(t.cancel_request.by))}: “${esc(t.cancel_request.reason)}”</p>`);
+  if (a.includes('APPROVE_CANCELLATION')) out.push(`<h4>False-positive cancellation</h4>${reason('Reason (required)')}<div class="btn-row"><button class="btn danger" data-act="APPROVE_CANCELLATION" type="button">Approve cancellation</button><button class="btn" data-act="DECLINE_CANCELLATION" type="button">Decline</button></div>`);
+  if (a.includes('DECIDE')) {
+    const dri = S.me.persona === 'DRI';
+    out.push(`<h4>Decision${t.returned ? ' (returned ticket)' : ''} — DoA ${esc(t.doa_level)}</h4>${t.triage ? `<p class="note">Analyst ${esc(uname(t.triage.by))} proposed <b>${esc(t.triage.proposed_option)}</b>${t.triage.note ? ' — “' + esc(t.triage.note) + '”' : ''}.</p>` : ''}
+      ${optionsRadio(t, dri)}${reason('Reason (required for an override)')}
+      <p class="note">${t.doa_level === 'L2' || t.amount >= 1000 ? 'L2: after your decision the ticket goes to Finance (PENDING_FINANCE).' : 'After your decision the execution agent proposes a plan for you to approve.'}</p>
+      <div class="btn-row"><button class="btn primary" data-act="DECIDE" type="button">Record decision</button></div>`);
   }
-}
-function statesLine(c) {
-  const seen = new Set(c.history.map(h => h.state));
-  const curIdx = CASE_STATES.indexOf(c.state);
-  const optional = ['MASTER_DATA_REVIEW', 'FIELD_VERIFICATION', 'FINANCE_APPROVAL', 'REGULATORY_REVIEW', 'READY_TO_RELEASE'];
-  const lastSeenIdx = Math.max(...[...seen].map(s => CASE_STATES.indexOf(s)));
-  const chips = CASE_STATES.map((s, i) => {
-    const cls = s === c.state ? 'cur' : seen.has(s) ? 'done' : (optional.includes(s) && i < lastSeenIdx) ? 'skip' : '';
-    return `<span class="${cls}">${esc(s.replace(/_/g, ' ').toLowerCase())}</span>`;
-  }).join('');
-  const side = ['RETURNED_TO_DRI', 'CLOSED_NO_ACTION'].filter(s => seen.has(s)).map(s => `<span class="${s === c.state ? 'cur' : 'done'}" style="${s === 'RETURNED_TO_DRI' ? 'border-color:var(--high);color:' + (s === c.state ? '#fff;background:var(--high)' : 'var(--high)') : ''}">${esc(s.replace(/_/g, ' ').toLowerCase())}</span>`).join('');
-  return `<div class="states-line" id="statesLine">${chips}${side}</div>`;
-}
-function activityPanel(c) {
-  if (S.agent && S.agent.show_agent_activity === false) return '';
-  const working = AGENT_STATES.includes(c.state) || (c.state === 'PLAN_APPROVAL' && !c.plan);
-  const who = c.state === 'DETECTED' ? 'Investigation agent is working' : c.state === 'VERIFYING' ? 'Verifier is re-running the gate' : 'Execution agent is working';
-  const rows = (c.activity || []).slice().reverse().map(a => `<div class="a-row${a.ok ? '' : ' bad'}"><span class="a-n">${a.n}</span>
-      <span class="a-tool">${esc(a.tool)}<span class="a-agent">${esc(a.agent)}</span></span><span>${esc(a.summary)}<span class="a-args">${esc(a.args)}</span></span></div>`).join('');
-  return `<div class="card" id="activityPanel"><div class="card-head"><h2>Agent activity<span class="count">${(c.activity || []).length} tool call(s) · mock (scripted)</span></h2></div>
-    ${working ? `<div class="working"><span class="spinner"></span> ${who}…</div>` : ''}
-    <div class="activity">${rows || '<div class="empty">No agent activity yet.</div>'}</div></div>`;
-}
-function actionForm(c) {
-  const acts = c.allowed_actions || [];
-  const out = [];
-  const reasonBox = (lbl) => `<div class="form-row"><label>${esc(lbl)}</label><textarea class="input f-reason" data-track></textarea></div>`;
-  if (acts.includes('DECIDE')) {
-    const inv = c.investigation || {};
-    const imp = Object.fromEntries((inv.options || []).map(o => [o.option_id, o.expected_financial_impact]));
-    const rec = inv.recommended_option;
-    const pb = c.playbook || { options: [] };
-    const opts = pb.options.map(o => {
-      const disabled = (o.option_id === 'HOLD_FIELD_VERIFICATION' && c.field_outcome) || (o.requires_match_confirmed && !(c.master_data && c.master_data.outcome === 'CONFIRMED'));
-      const route = o.routes_to && !c.field_outcome ? ' → field verification first' : o.terminal === 'RELEASE_AS_IS' ? ' → bill released unchanged' : o.terminal === 'CLOSE' ? ' → case closed' : o.steps.length ? ` → plan: ${o.steps.length} step type(s)` : '';
-      return `<label class="${o.option_id === rec ? 'rec' : ''}"><input type="radio" name="opt" value="${esc(o.option_id)}"${o.option_id === rec && !disabled ? ' checked' : ''}${disabled ? ' disabled' : ''}>
-        <span><span class="o-label">${esc(o.label)}</span>${o.option_id === rec ? ' <span class="pill">recommended</span>' : ''}${o.requires_reason ? ' <span class="pill">reason required</span>' : ''}
-        <span class="o-sub" style="display:block">${impactText(imp[o.option_id])}${esc(route)}${disabled ? ' · not available now' : ''}</span></span></label>`;
-    }).join('');
-    out.push(`<div class="opt-list">${opts}</div>${c.field_outcome ? `<p class="note">Field outcome: <b>${esc(c.field_outcome.outcome)}</b> ${c.field_outcome.note ? '— “' + esc(c.field_outcome.note) + '”' : ''}</p>` : ''}
-      ${reasonBox('Reason / comment (required for release as-is, defer, no action, close)')}
-      <div class="btn-row"><button class="btn primary" data-act="DECIDE" type="button">Record decision</button>${acts.includes('CLOSE_NO_ACTION') ? '<button class="btn danger" data-act="CLOSE_NO_ACTION" type="button">Close — no action</button>' : ''}</div>`);
-  } else if (acts.includes('APPROVE_PLAN')) {
-    const p = c.plan;
-    out.push(`<p>The execution agent proposes <b>${p.steps.length}</b> step(s) for <b>${esc(p.label)}</b>. The server validated that every step belongs to the approved playbook; the agent may only run the next approved step.</p>
+  if (a.includes('CANCEL_DUPLICATE')) out.push(`<details class="inline-details"><summary>Cancel as duplicate</summary><div class="form-row"><label>Duplicate of</label><input class="input f-dup" data-track placeholder="BEX-…"></div>${reason('Reason (required)', 'f-reason-dup')}<div class="btn-row"><button class="btn danger sm" data-act="CANCEL_DUPLICATE" type="button">Cancel as duplicate</button></div></details>`);
+  if (a.includes('FINANCE_APPROVE')) {
+    const d = t.decision || {};
+    out.push(`<h4>Financial impact — ${fmtMoney(t.amount)}</h4><dl class="kv"><dt>Ticket</dt><dd>${typeBadge(t.type)} ${esc(t.customer_name)}</dd><dt>Bills</dt><dd class="mono">${esc([t.draft_bill_id].concat(t.issued_bill_ids || []).filter(Boolean).join(', '))}</dd>
+      <dt>GL period</dt><dd>${esc((t.expected || {}).gl_period || '— (draft corrected before issue)')}</dd><dt>DRI decision</dt><dd><b>${esc(d.label || '')}</b> by ${esc(uname(d.by))}${d.reason ? ' — “' + esc(d.reason) + '”' : ''}</dd></dl>
+      ${reason('Comment (required to reject)')}<div class="btn-row"><button class="btn primary" data-act="FINANCE_APPROVE" type="button">Approve ${fmtMoney(t.amount)}</button><button class="btn danger" data-act="FINANCE_REJECT" type="button">Reject</button></div>`);
+  }
+  if (a.includes('APPROVE_PLAN')) {
+    const p = t.plan;
+    out.push(`<h4>Plan approval — you made the decision</h4><p>The execution agent proposes <b>${p.steps.length}</b> step(s) for <b>${esc(p.label)}</b>; the server validated each against the playbook. The agent may only run the next approved step.</p>
       <ol>${p.steps.map(s => `<li><span class="mono">${esc(s.step)}</span> <span class="faint mono">${esc(Object.entries(s.params).filter(([k]) => k !== 'note').map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join(',') : v)).join(' '))}</span><div class="sub-line">check: ${esc(s.check)}</div></li>`).join('')}</ol>
-      ${c.requires_regulatory ? '<p class="note">Communications go to Regulatory review after verification.</p>' : '<p class="note">No regulatory flag: approving the plan also approves the drafted customer letter (logged as COMMS_APPROVED).</p>'}
-      ${reasonBox('Comment (required to reject)')}
-      <div class="btn-row"><button class="btn primary" data-act="APPROVE_PLAN" type="button">Approve plan</button><button class="btn danger" data-act="REJECT_PLAN" type="button">Reject plan</button>${acts.includes('CLOSE_NO_ACTION') ? '<button class="btn" data-act="CLOSE_NO_ACTION" type="button">Close — no action</button>' : ''}</div>`);
-  } else if (c.state === 'PLAN_APPROVAL' && !c.plan) {
-    out.push('<div class="working"><span class="spinner"></span> The execution agent is building the plan…</div>');
+      ${reason('Comment (required to send back)')}<div class="btn-row"><button class="btn primary" data-act="APPROVE_PLAN" type="button">Approve plan</button><button class="btn danger" data-act="RETURN_PLAN" type="button">Send back</button></div>`);
+  } else if (t.state === 'PLAN_APPROVAL' && !t.plan) out.push('<div class="working"><span class="spinner"></span> The execution agent is building the plan…</div>');
+  if (a.includes('APPROVE_COMMS')) out.push(`<h4>Communications approval (dispute / regulatory flag: ${esc(t.flag.join(', '))})</h4>${commsEditor(t, true)}`);
+  if (a.includes('RELEASE')) {
+    const sb = t.sandbox_bill || {};
+    const what = (t.release || {}).mode === 'AS_IS' ? `unchanged (override: “${esc(t.release.reason)}”)` : sb.bill_status === 'CANCELLED' ? 'as cancelled — confirm that no bill is issued' : `as regenerated: ${fmtMoney(+sb.total_amount || 0)} for ${esc(sb.period_start)} → ${esc(sb.period_end)}`;
+    out.push(`<h4>Release</h4><p>Bill <span class="mono">${esc(t.draft_bill_id)}</span> is ready ${what}.</p><div class="btn-row"><button class="btn primary" data-act="RELEASE" type="button">${sb.bill_status === 'CANCELLED' ? 'Confirm cancellation' : 'Release bill'}</button></div>`);
   }
-  if (acts.includes('CONFIRM_MATCH')) out.push(queueItem('masterdata', Object.assign({}, c, { open: true })).replace(/^<div class="card[^"]*"[^>]*>[\s\S]*?<div class="card-body">/, '').replace(/<\/div><\/div>$/, ''));
-  if (acts.includes('FIELD_OUTCOME')) out.push(queueItem('field', Object.assign({}, c, { open: true })).replace(/^<div class="card[^"]*"[^>]*>[\s\S]*?<div class="card-body">/, '').replace(/<\/div><\/div>$/, ''));
-  if (acts.includes('FINANCE_APPROVE')) out.push(queueItem('finance', Object.assign({}, c, { open: true })).replace(/^<div class="card[^"]*"[^>]*>[\s\S]*?<div class="card-body">/, '').replace(/<\/div><\/div>$/, ''));
-  if (acts.includes('APPROVE_COMMS')) out.push(queueItem('regulatory', Object.assign({}, c, { open: true })).replace(/^<div class="card[^"]*"[^>]*>[\s\S]*?<div class="card-body">/, '').replace(/<\/div><\/div>$/, ''));
-  if (c.state === 'READY_TO_RELEASE' && lvl('billrun') === 'A' && c.draft_bill_id) {
-    const sb = c.sandbox_bill || {};
-    const what = (c.release || {}).mode === 'AS_IS' ? `unchanged (release as-is: “${esc(c.release.reason)}”)` : sb.bill_status === 'CANCELLED' ? 'as cancelled (no bill issued)' : `regenerated: ${fmtMoney(+sb.total_amount || 0)} for ${esc(sb.period_start)} → ${esc(sb.period_end)}`;
-    out.push(`<p>Bill <span class="mono">${esc(c.draft_bill_id)}</span> is ready to release ${what}.</p><div class="btn-row"><button class="btn primary" data-release="${esc(c.draft_bill_id)}" type="button">Release bill</button></div>`);
+  if (a.includes('REOPEN')) out.push(`<details class="inline-details"><summary>Reopen (within 5 business days)</summary>${reason('Reason (required)')}<div class="btn-row"><button class="btn danger sm" data-act="REOPEN" type="button">Reopen</button></div></details>`);
+  if (a.includes('L0_REVIEW')) out.push(`<h4>L0 digest review</h4>${reason('Comment (optional)', 'f-comment')}<div class="btn-row"><button class="btn primary" data-act="L0_REVIEW" type="button">Mark reviewed</button></div>`);
+  if (!out.length) {
+    if (DONE.includes(t.state)) return '';
+    return `<div class="card"><div class="muted-box">${AGENT_STATES.includes(t.state) ? 'Agents / system are working on this ticket.' : `Waiting on <b>${esc(PERSONA_LABEL[t.assignee_persona] || t.assignee_persona)}</b>.`} ${S.me.persona === 'FINANCE' ? 'Finance acts only on PENDING_FINANCE.' : ''}</div></div>`;
   }
-  if (!out.length) return '';
-  const owner = c.owner_role ? ROLE_LABEL[c.owner_role] : '';
-  return `<div class="card action-panel" data-case="${esc(c.case_id)}"><div class="card-head"><h2>Your action${owner ? ' — ' + esc(owner) : ''}</h2><div class="tools">${stateBadge(c.state)}</div></div><div class="card-body">${out.join('<hr style="border:0;border-top:1px solid var(--border);margin:14px 0">')}</div></div>`;
+  return `<div class="card action-panel" data-ticket="${esc(t.ticket_id)}"><div class="card-head"><h2>Your action — ${esc(PERSONA_LABEL[S.me.persona])}</h2><div class="tools">${stateBadge(t.state)}</div></div><div class="card-body">${out.map(x => `<div class="act-sec">${x}</div>`).join('<hr class="sep">')}</div></div>`;
+}
+function commsEditor(t, open) {
+  const cm = t.comms || {}, ro = open ? '' : ' readonly';
+  return `<div class="form-row"><label>Customer letter</label><textarea class="input letter-edit f-letter" data-track${ro}>${esc(cm.customer_letter || '')}</textarea></div>
+    ${cm.regulator_response || (t.flag || []).length ? `<div class="form-row"><label>Regulator response</label><textarea class="input letter-edit f-response" data-track${ro}>${esc(cm.regulator_response || '')}</textarea></div>` : ''}
+    ${open ? `<div class="btn-row"><button class="btn" data-act="EDIT_COMMS" type="button">Save edits</button><button class="btn primary" data-act="APPROVE_COMMS" type="button">Approve communications</button></div>` : ''}
+    <p class="note">${(cm.edits || []).length} edit(s) logged with before/after.${cm.approved_by ? ' Approved by ' + esc(uname(cm.approved_by)) + '.' : ''}</p>`;
 }
 function evidenceRows(inv) {
   return (inv.evidence || []).map(e => {
     const sys = { OMS: 'OMS', 'CC&B': 'CCB', MDM: 'MDM', 'Master data': 'XWALK', Integration: 'INT', CRM: 'CRM', GL: 'GL' }[e.system] || 'KEY';
-    const link = can('explorer') ? `<button class="linkish mono" data-goto-file="${esc(e.file)}" data-goto-q="${esc(e.record_id)}" title="Open in Data Explorer">${esc(e.record_id)}</button>` : `<span class="mono">${esc(e.record_id)}</span>`;
-    return `<tr><td><span class="sys sys-${sys}">${esc(e.system)}</span></td><td class="mono" style="white-space:nowrap">${esc(e.file)}</td><td style="white-space:nowrap">${link}</td><td>${esc(e.claim)}</td></tr>`;
+    return `<tr><td><span class="sys sys-${sys}">${esc(e.system)}</span></td><td class="mono" style="white-space:nowrap">${esc(e.file)}</td><td style="white-space:nowrap"><button class="linkish mono" data-goto-file="${esc(e.file)}" data-goto-q="${esc(e.record_id)}" title="Open in Data Explorer">${esc(e.record_id)}</button></td><td>${esc(e.claim)}</td></tr>`;
   }).join('');
 }
-SCREENS.case = {
+function slaDetail(sv) {
+  const names = { first_action: 'First action', resolve: 'Resolve', finance: 'Finance step' };
+  return Object.entries(sv).filter(([k, v]) => v && typeof v === 'object').map(([k, c]) => `<div class="sla-row"><span>${names[k]}</span>${slaBadge({ resolve: c, worst: c.status }, true)}<span class="faint">due ${esc(fmtLocal(c.due))}${c.met_at ? ' · met ' + esc(fmtLocal(c.met_at)) : ''} · ${c.pct}%</span></div>`).join('')
+    + (sv.held_deadline ? `<div class="sla-row"><span>Held-bill deadline</span><span class="faint">${esc(fmtLocal(sv.held_deadline))} (auto-P1 one business day before)</span></div>` : '')
+    + (sv.advance_deadline ? `<div class="sla-row"><span>ADVANCE deadline</span><span class="faint">${esc(fmtLocal(sv.advance_deadline))} (2 business days before the next run)</span></div>` : '');
+}
+SCREENS.ticket = {
   live: true,
-  load: (id, first) => api('/api/cases/' + encodeURIComponent(id) + (first ? '?view=1' : '')),
-  partial(c) { const a = $('#activityPanel'); if (a) a.outerHTML = activityPanel(c); const s = $('#statesLine'); if (s) s.outerHTML = statesLine(c); },
-  render(c) {
-    const back = `<a class="linkish" href="#/${can('cases') ? 'cases' : 'mywork'}">← ${can('cases') ? 'Cases' : 'My Work'}</a>`;
-    const hdr = `${back}<div class="page-head" style="margin-top:6px"><div><h2><span class="mono">${esc(c.case_id)}</span> ${typeBadge(c.case_type)} ${esc(c.customer_name)}${tagFor(c.account_id)}</h2>
-      <p><span class="mono">${esc(c.account_id)}</span> · SA <span class="mono">${esc(c.sa_id)}</span> · premise <span class="mono">${esc(c.premise)}</span> · disconnect ${esc(c.root_wo_id)} (${esc(c.wo_subtype)}) on ${esc(c.disconnect_date)} · gates ${gateTags(c.gates)}</p></div>
-      <div class="tools">${stateBadge(c.state)}${c.owner_role ? `<span class="note">waiting on <b>${esc(ROLE_LABEL[c.owner_role])}</b></span>` : ''}</div></div>${statesLine(c)}`;
-    if (c.view === 'task') {
-      const iss = c.integration_issue;
-      return hdr + `${actionForm(c)}<div class="card"><div class="card-head"><h2>Case summary</h2><span class="note">Task view — full evidence is limited to case owners</span></div><div class="card-body"><p>${esc(c.summary || 'Investigation in progress…')}</p>
-        <dl class="kv"><dt>At stake</dt><dd>${fmtMoney(c.amount_at_stake || 0)}</dd>${c.unmatched_premise ? `<dt>Premise match</dt><dd>${esc(c.unmatched_premise)} → ${esc(c.suggested_premise)} ${c.master_data ? '(' + esc(c.master_data.outcome) + ')' : ''}</dd>` : ''}
-        ${c.field_outcome ? `<dt>Field outcome</dt><dd>${esc(c.field_outcome.outcome)}</dd>` : ''}${iss ? `<dt>Integration issue</dt><dd><a class="linkish" href="#/integration">${esc(iss.issue_id)}</a> ${esc(iss.signature)} (${esc(iss.status)})</dd>` : ''}</dl></div></div>`;
-    }
-    const inv = c.investigation;
-    const dec = c.decision ? c.decision.option_id : null;
+  load: (id, first) => api('/api/tickets/' + encodeURIComponent(id) + (first ? '?view=1' : '')),
+  partial(t) { const a = $('#activityPanel'); if (a) a.outerHTML = activityPanel(t); const s = $('#statesLine'); if (s) s.outerHTML = statesLine(t); },
+  render(t) {
+    const inv = t.investigation, dec = t.decision;
+    const flags = [(t.flag || []).length ? `<span class="pill flag" title="${esc(t.flag.join(', '))}">dispute / regulatory flag</span>` : '', t.returned ? '<span class="pill">returned</span>' : '', t.deferred ? '<span class="pill">deferred</span>' : '', t.match ? `<span class="pill">ID match ${esc(t.match.status.toLowerCase())}</span>` : ''].join(' ');
+    const hdr = `<a class="linkish" href="#/tickets">← Tickets</a><div class="page-head" style="margin-top:6px"><div><h2><span class="mono">${esc(t.ticket_id)}</span> ${typeBadge(t.type)} ${esc(t.customer_name)}${tagFor(t.account_id)}</h2>
+      <p>${prioBadge(t.priority)} <span class="faint">${esc(t.impact)} impact × ${esc(t.urgency)} urgency · ${t.bills_affected} bill(s)</span> · ${doaBadge(t.doa_level)} · ${DONE.includes(t.state) ? '' : slaBadge(t.sla_view)} ${flags}</p>
+      <p><span class="mono">${esc(t.account_id)}</span> · SA <span class="mono">${esc(t.sa_id)}</span> · premise <span class="mono">${esc(t.premise)}</span> · disconnect ${esc(t.root_wo_id)} (${esc(t.wo_subtype)}) on ${esc(t.disconnect_date)} · gates ${gateTags(t.gates)} · amount <b>${fmtMoney(t.amount)}</b></p></div>
+      <div class="tools">${stateBadge(t.state)}${DONE.includes(t.state) ? (t.closure_code ? `<span class="pill">${esc(t.closure_code)}</span>` : '') : `<span class="note">with <b>${esc(PERSONA_LABEL[t.assignee_persona] || t.assignee_persona)}</b> · owner DRI</span>`}</div></div>${statesLine(t)}`;
     const invCard = inv ? `<div class="card"><div class="card-head"><h2>Investigation</h2><div class="tools"><span class="pill">cause ${esc(inv.probable_cause)}</span><span class="pill">confidence ${inv.confidence.toFixed(2)}</span></div></div>
-        <div class="card-body"><p style="margin-top:0">${esc(inv.summary)}</p>
-        <dl class="kv"><dt>Probable cause</dt><dd><b>${esc(inv.probable_cause)}</b> — ${esc(inv.probable_cause_label)}</dd><dt>Recommended</dt><dd><b>${esc(inv.recommended_label)}</b></dd>
+        <div class="card-body"><p style="margin-top:0">${esc(inv.summary)}</p><dl class="kv"><dt>Probable cause</dt><dd><b>${esc(inv.probable_cause)}</b> — ${esc(inv.probable_cause_label)}</dd><dt>Recommended</dt><dd><b>${esc(inv.recommended_label)}</b></dd>
         <dt>Confidence</dt><dd>${inv.confidence.toFixed(2)} = 0.60 + 0.10 × ${inv.confidence_signals.length} signal(s)${inv.confidence >= 0.95 ? ' (capped)' : ''}: ${esc(inv.confidence_signals.join('; ') || 'none')}</dd>
         ${inv.open_questions.length ? `<dt>Open questions</dt><dd><ul style="margin:0;padding-left:18px">${inv.open_questions.map(q => `<li>${esc(q)}</li>`).join('')}</ul></dd>` : ''}</dl></div>
         <div class="table-wrap"><table class="grid compact"><thead><tr><th>System</th><th>File</th><th>Record</th><th>Claim</th></tr></thead><tbody>${evidenceRows(inv)}</tbody></table></div>
-        <div class="card-foot">Every claim cites a record that existed at scenario time (validated by the server).${can('explorer') ? ' Click a record to open it in the Data Explorer.' : ''}</div></div>`
-      : `<div class="card"><div class="card-head"><h2>Investigation</h2></div><div class="card-body">${c.investigation_error ? `<p class="badge sev-HIGH">Guardrail stopped the investigation</p><p>${esc(c.investigation_error)}</p>` : '<div class="working"><span class="spinner"></span> Investigation agent is working…</div>'}</div></div>`;
-    const options = inv ? `<div class="card"><div class="card-head"><h2>Options &amp; financial impact</h2><span class="note">amounts from calculate_correction</span></div><div class="table-wrap"><table class="grid compact"><thead><tr><th>Option</th><th>Bill before → after / impact</th><th>Rationale</th></tr></thead><tbody>
-        ${inv.options.map(o => `<tr${o.option_id === dec ? ' style="background:var(--accent-soft)"' : ''}><td><b>${esc(o.label)}</b>${o.option_id === inv.recommended_option ? ' <span class="pill">recommended</span>' : ''}${o.option_id === dec ? ' <span class="pill">decided</span>' : ''}</td><td>${impactText(o.expected_financial_impact)}</td><td>${esc(o.rationale)}</td></tr>`).join('')}</tbody></table></div>
-        ${c.decisions.length ? `<div class="card-foot">${c.decisions.map(d => `Decision: <b>${esc(d.label)}</b> by ${esc(d.by)}${d.reason ? ' — “' + esc(d.reason) + '”' : ''}`).join('<br>')}</div>` : ''}</div>` : '';
-    const plan = c.plan ? `<div class="card"><div class="card-head"><h2>Plan — ${esc(c.plan.label)}</h2><div class="tools">${c.plan.approved_by ? `<span class="pill">approved by ${esc(c.plan.approved_by)}</span>` : '<span class="pill">awaiting approval</span>'}</div></div><div class="table-wrap"><table class="grid compact"><thead><tr><th>#</th><th>Step</th><th>Parameters</th><th>Status</th><th>Result / check</th></tr></thead><tbody>
-        ${c.plan.steps.map(s => `<tr><td>${s.seq}</td><td class="mono">${esc(s.step)}</td><td class="mono" style="font-size:11.5px">${esc(Object.entries(s.params).filter(([k]) => k !== 'note').map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join(',') : v)).join(' '))}</td>
+        <div class="card-foot">Every claim cites a record that existed at scenario time (server-validated). Click a record to open it in the Data Explorer.</div></div>`
+      : `<div class="card"><div class="card-head"><h2>Investigation</h2></div><div class="card-body">${t.investigation_error ? `<p class="badge sev-HIGH">Guardrail stopped the investigation</p><p>${esc(t.investigation_error)}</p>` : '<div class="working"><span class="spinner"></span> Investigation agent is working…</div>'}</div></div>`;
+    const options = inv ? `<div class="card"><div class="card-head"><h2>Options — bill before → after</h2><span class="note">amounts from calculate_correction</span></div><div class="table-wrap"><table class="grid compact"><thead><tr><th>Option</th><th>Before → after / impact</th><th>Rationale</th></tr></thead><tbody>
+        ${inv.options.map(o => `<tr${dec && o.option_id === dec.option_id ? ' style="background:var(--accent-soft)"' : ''}><td><b>${esc(o.label)}</b>${o.option_id === inv.recommended_option ? ' <span class="pill">★ recommended</span>' : ''}${dec && o.option_id === dec.option_id ? ' <span class="pill">decided</span>' : ''}</td><td>${impactText(o.expected_financial_impact)}</td><td>${esc(o.rationale)}</td></tr>`).join('')}</tbody></table></div>
+        ${t.decisions.length ? `<div class="card-foot">${t.decisions.map(d => `Decision: <b>${esc(d.label)}</b> by ${esc(uname(d.by))} (${esc(d.persona)}, ${esc(d.level)}${d.override ? ', override' : ''})${d.reason ? ' — “' + esc(d.reason) + '”' : ''}`).join('<br>')}</div>` : ''}</div>` : '';
+    const plan = t.plan ? `<div class="card"><div class="card-head"><h2>Plan — ${esc(t.plan.label)}</h2><div class="tools">${t.plan.approved_by ? `<span class="pill">approved by ${esc(uname(t.plan.approved_by))}</span>` : '<span class="pill">awaiting approval</span>'}</div></div><div class="table-wrap"><table class="grid compact"><thead><tr><th>#</th><th>Step</th><th>Parameters</th><th>Status</th><th>Result / check</th></tr></thead><tbody>
+        ${t.plan.steps.map(s => `<tr><td>${s.seq}</td><td class="mono">${esc(s.step)}</td><td class="mono" style="font-size:11.5px">${esc(Object.entries(s.params).filter(([k]) => k !== 'note').map(([k, v]) => k + '=' + (Array.isArray(v) ? v.join(',') : v)).join(' '))}</td>
           <td><span class="badge ${s.status === 'DONE' ? 'st-SUCCESS' : s.status === 'FAILED' ? 'st-ERROR' : 'st-NONE'}">${esc(s.status)}</span></td><td>${esc(s.result || '')}<div class="sub-line">${esc(s.check_result || s.check)}</div></td></tr>`).join('')}</tbody></table></div>
-        ${c.execution && c.execution.status === 'STEP_FAILED' ? `<div class="card-foot" style="color:var(--high)"><b>STEP_FAILED:</b> ${esc(c.execution.explanation)}</div>` : ''}
-        ${c.verification ? `<div class="card-foot"><b>Verifier:</b> ${c.verification.passed ? '✓' : '✗'} ${esc(c.verification.detail)}</div>` : ''}</div>` : '';
-    const cm = c.comms || {};
-    const drafts = cm.customer_letter ? `<div class="card"><div class="card-head"><h2>Drafted communications</h2><div class="tools">${cm.approved_by ? `<span class="pill">approved by ${esc(cm.approved_by)}</span>` : '<span class="pill">not yet approved</span>'}${c.requires_regulatory ? '<span class="pill">regulatory review required</span>' : ''}</div></div>
-        <div class="card-body"><div class="form-label">Customer letter</div><pre class="letter">${esc(cm.customer_letter)}</pre>${cm.regulator_response ? `<div class="form-label" style="margin-top:10px">Regulator response</div><pre class="letter">${esc(cm.regulator_response)}</pre>` : ''}${cm.edits && cm.edits.length ? `<p class="note">${cm.edits.length} edit(s) logged.</p>` : ''}</div></div>` : '';
-    const ex = c.expected || {};
-    const facts = `<div class="card"><div class="card-head"><h2>Case facts</h2></div><div class="card-body"><dl class="kv">
-        <dt>Scenario</dt><dd>${esc(c.scenario_id)} · time ${esc(c.scenario_time)}</dd>
-        <dt>Window</dt><dd>${esc(c.window.start)} → ${esc(c.window.end || 'open')}${c.reconnect_wo_id ? ' (reconnect ' + esc(c.reconnect_wo_id) + ')' : ''}</dd>
-        ${c.draft_bill_id ? `<dt>Held draft</dt><dd class="mono">${esc(c.draft_bill_id)} · ${esc(ex.action)} ${fmtMoney(ex.before || 0)} → ${fmtMoney(ex.after || 0)}</dd>` : ''}
-        ${c.issued_bill_ids && c.issued_bill_ids.length ? `<dt>Issued bills</dt><dd class="mono">${esc(c.issued_bill_ids.join(', '))}</dd>` : ''}
-        ${ex.credit != null ? `<dt>Credit</dt><dd>${fmtMoney(ex.credit)} → GL ${esc(ex.gl_period || '')}</dd>` : ''}
-        ${c.linked_case_ids.length ? `<dt>Linked</dt><dd>${c.linked_case_ids.map(x => caseLink(x)).join(', ')}</dd>` : ''}
-        ${c.unmatched_premise ? `<dt>Premise match</dt><dd>${esc(c.unmatched_premise)} → ${esc(c.suggested_premise)} ${c.master_data ? `<b>${esc(c.master_data.outcome)}</b> by ${esc(c.master_data.by)}` : '(awaiting steward)'}</dd>` : ''}
-        ${c.field_outcome ? `<dt>Field</dt><dd>${esc(c.field_outcome.outcome)} by ${esc(c.field_outcome.by)}</dd>` : ''}
-        ${c.finance ? `<dt>Finance</dt><dd>${esc(c.finance.outcome)} by ${esc(c.finance.by)}${c.finance.note ? ' — “' + esc(c.finance.note) + '”' : ''}</dd>` : ''}
-        ${c.integration_issue ? `<dt>Integration</dt><dd>${can('integration') ? '<a class="linkish" href="#/integration">' + esc(c.integration_issue.issue_id) + '</a>' : esc(c.integration_issue.issue_id)} ${esc(c.integration_issue.signature)} (${esc(c.integration_issue.status)})</dd>` : ''}
-        ${c.requires_regulatory ? `<dt>Regulatory</dt><dd>open ${esc(c.regulatory_crm_cases.join(', '))}</dd>` : ''}</dl></div></div>`;
-    const rel = c.related || { crm: [], gl: [] };
+        ${t.execution && t.execution.status === 'STEP_FAILED' ? `<div class="card-foot" style="color:var(--high)"><b>STEP_FAILED:</b> ${esc(t.execution.explanation)}</div>` : ''}
+        ${t.verification ? `<div class="card-foot"><b>Verifier:</b> ${t.verification.passed ? '✓' : '✗'} ${esc(t.verification.detail)}</div>` : ''}</div>` : '';
+    const ex = t.expected || {};
+    const facts = `<div class="card"><div class="card-head"><h2>Ticket facts &amp; SLA</h2></div><div class="card-body"><div class="sla-list">${slaDetail(t.sla_view)}</div><dl class="kv" style="margin-top:10px">
+        <dt>Scenario</dt><dd>${esc(t.scenario_id)} · time ${esc(t.scenario_time)}</dd><dt>Window</dt><dd>${esc(t.window.start)} → ${esc(t.window.end || 'open')}${t.reconnect_wo_id ? ' (reconnect ' + esc(t.reconnect_wo_id) + ')' : ''}</dd>
+        ${t.draft_bill_id ? `<dt>Held draft</dt><dd class="mono">${esc(t.draft_bill_id)} · ${esc(ex.action)} ${fmtMoney(ex.before || 0)} → ${fmtMoney(ex.after || 0)}</dd>` : ''}
+        ${t.issued_bill_ids.length ? `<dt>Issued bills</dt><dd class="mono">${esc(t.issued_bill_ids.join(', '))}</dd>` : ''}${ex.credit != null ? `<dt>Credit</dt><dd>${fmtMoney(ex.credit)} → GL ${esc(ex.gl_period || '')}</dd>` : ''}
+        ${t.linked_ticket_ids.length ? `<dt>Linked</dt><dd>${t.linked_ticket_ids.map(x => ticketLink(x)).join(', ')}</dd>` : ''}
+        ${t.finance ? `<dt>Finance</dt><dd>${esc(t.finance.outcome)} by ${esc(uname(t.finance.by))}${t.finance.note ? ' — “' + esc(t.finance.note) + '”' : ''}</dd>` : ''}
+        ${t.register_entry ? `<dt>Root cause</dt><dd><a class="linkish" href="#/register">${esc(t.register_entry.signature)}</a> (${t.register_entry.accounts.length} account(s))</dd>` : ''}
+        ${t.digest ? `<dt>L0 digest</dt><dd>reviewed by ${esc(uname(t.digest.by))}${t.digest.comment ? ' — “' + esc(t.digest.comment) + '”' : ''}</dd>` : ''}
+        ${t.release && t.release.released ? `<dt>Release</dt><dd>${esc(t.release.mode)} ${t.release.amount != null ? fmtMoney(t.release.amount) : ''} by ${esc(uname(t.release.by))}</dd>` : ''}</dl></div></div>`;
+    const idm = t.match && !(t.allowed_actions || []).includes('CONFIRM_MATCH') ? `<div class="card"><div class="card-head"><h2>ID match (G5)</h2></div><div class="card-body">${matchPanel(t, false)}</div></div>` : '';
+    const drafts = (t.comms || {}).customer_letter && !(t.allowed_actions || []).includes('APPROVE_COMMS') ? `<div class="card"><div class="card-head"><h2>Drafts</h2></div><div class="card-body">${commsEditor(t, false)}</div></div>` : '';
+    const rel = t.related || { crm: [], gl: [] };
     const related = `<div class="card"><div class="card-head"><h2>Related CRM &amp; GL</h2><span class="note">at scenario time</span></div><div class="card-body">
         ${rel.crm.length ? `<div class="crm-list">${rel.crm.map(x => `<details><summary><span class="mono">${esc(x.case_id)}</span><b>${esc(x.subject)}</b><span class="muted">${esc(x.opened_at)} · ${esc(x.category)} · ${esc(x.status)}</span></summary><div class="crm-notes">${esc(x.notes) || '—'}</div></details>`).join('')}</div>` : '<p class="note">No CRM cases at scenario time.</p>'}
-        ${rel.gl.length ? `<table class="grid compact" style="margin-top:10px"><thead><tr><th>Journal</th><th>Bill</th><th>Period</th><th>Account</th><th class="r">Debit</th><th class="r">Credit</th></tr></thead><tbody>${rel.gl.map(g => `<tr><td class="mono">${esc(g.je_id)}/${esc(g.je_line)}</td><td class="mono">${esc(g.source_ref)}</td><td>${esc(g.accounting_period)} <span class="pill">${esc(g.period_status)}</span></td><td>${esc(g.gl_account)} ${esc(g.gl_account_name)}</td><td class="r num">${+g.debit ? fmtMoney(+g.debit) : ''}</td><td class="r num">${+g.credit ? fmtMoney(+g.credit) : ''}</td></tr>`).join('')}</tbody></table>` : '<p class="note">No GL lines for issued bills in this case.</p>'}</div></div>`;
-    const trail = `<div class="card"><div class="card-head"><h2>Case audit trail<span class="count">${(c.audit_trail || []).length} event(s)</span></h2></div>${feedTable((c.audit_trail || []).slice().reverse(), true)}</div>`;
-    return hdr + actionForm(c) + `<div class="grid2"><div>${invCard}</div><div>${activityPanel(c)}${facts}</div></div>` + options + plan + drafts + related + trail;
+        ${rel.gl.length ? `<table class="grid compact" style="margin-top:10px"><thead><tr><th>Journal</th><th>Bill</th><th>Period</th><th>Account</th><th class="r">Debit</th><th class="r">Credit</th></tr></thead><tbody>${rel.gl.map(g => `<tr><td class="mono">${esc(g.je_id)}/${esc(g.je_line)}</td><td class="mono">${esc(g.source_ref)}</td><td>${esc(g.accounting_period)} <span class="pill">${esc(g.period_status)}</span></td><td>${esc(g.gl_account)} ${esc(g.gl_account_name)}</td><td class="r num">${+g.debit ? fmtMoney(+g.debit) : ''}</td><td class="r num">${+g.credit ? fmtMoney(+g.credit) : ''}</td></tr>`).join('')}</tbody></table>` : '<p class="note">No GL lines for issued bills on this ticket.</p>'}</div></div>`;
+    const trail = `<div class="card"><div class="card-head"><h2>Ticket audit trail<span class="count">${(t.audit_trail || []).length} event(s)</span></h2></div>${feedTable((t.audit_trail || []).slice().reverse(), true)}</div>`;
+    return hdr + actionPanel(t) + `<div class="grid2"><div>${invCard}</div><div>${activityPanel(t)}${facts}</div></div>` + idm + options + plan + drafts + related + trail;
+  },
+};
+
+/* ---------- Finance approvals, DRI digest, communications, register ---------- */
+SCREENS.finance = {
+  live: true,
+  load: () => api('/api/finance'),
+  render(d) {
+    const open = d.items.filter(i => i.open), done = d.items.filter(i => !i.open);
+    const card = t => { const dd = t.decision || {}; return `<div class="card${t.open && (t.allowed_actions || []).length ? ' action-panel' : ''}" data-ticket="${esc(t.ticket_id)}"><div class="card-head"><h2>${ticketLink(t.ticket_id)} ${typeBadge(t.type)} ${esc(t.customer_name)}${tagFor(t.account_id)}</h2><div class="tools">${prioBadge(t.priority)} ${stateBadge(t.state)}</div></div>
+      <div class="card-body"><dl class="kv"><dt>Amount</dt><dd><b class="num">${fmtMoney(t.amount)}</b> ${t.type === 'PREVENT' ? '(reduction of a held draft)' : '(credit on issued bills)'}</dd>
+        <dt>Bills affected</dt><dd class="mono">${esc([t.draft_bill_id].concat(t.issued_bill_ids || []).filter(Boolean).join(', '))}</dd>
+        <dt>GL period</dt><dd>${t.type === 'REMEDIATE' ? `${esc((t.expected || {}).gl_period)} <span class="badge ${t.gl_period_status === 'OPEN' ? 'st-SUCCESS' : 'st-ERROR'}">${esc(t.gl_period_status || 'unknown')}</span> <span class="note">credits post only to an OPEN period</span>` : '— (corrected before issue)'}</dd>
+        <dt>DRI decision</dt><dd><b>${esc(dd.label || '')}</b> by ${esc(uname(dd.by))} (${esc(dd.level || '')})${dd.reason ? ' — “' + esc(dd.reason) + '”' : ''}</dd>
+        <dt>Rationale</dt><dd>${esc(((t.investigation || {}).options || []).filter(o => o.option_id === dd.option_id).map(o => o.rationale).join('') || '')}</dd>
+        ${t.finance ? `<dt>Outcome</dt><dd><b>${esc(t.finance.outcome)}</b> by ${esc(uname(t.finance.by))}${t.finance.note ? ' — “' + esc(t.finance.note) + '”' : ''}</dd>` : ''}</dl>
+        ${t.open && (t.allowed_actions || []).includes('FINANCE_APPROVE') ? `<div class="form-row"><label>Comment (required to reject)</label><textarea class="input f-reason" data-track></textarea></div><div class="btn-row"><button class="btn primary" data-act="FINANCE_APPROVE" type="button">Approve ${fmtMoney(t.amount)}</button><button class="btn danger" data-act="FINANCE_REJECT" type="button">Reject</button></div>` : ''}</div></div>`; };
+    return head('Finance approvals', 'L2 (DRI + Finance): pre-issue reductions of $1,000 or more and every REMEDIATE credit · ' + esc(S.scId)) +
+      (open.length ? open.map(card).join('') : '<div class="card"><div class="empty">Nothing is pending Finance in this scenario.</div></div>') +
+      (done.length ? '<h3 class="sec-h">Decided</h3>' + done.map(card).join('') : '');
+  },
+};
+SCREENS.digest = {
+  live: true,
+  load: () => api('/api/digest'),
+  render(d) {
+    const rows = d.items.map(t => `<tr data-ticket="${esc(t.ticket_id)}"><td>${ticketLink(t.ticket_id)} ${typeBadge(t.type)}</td><td>${esc(t.customer_name)}${tagFor(t.account_id)}</td>
+      <td>${stateBadge(t.state)}${t.closure_code ? `<div class="sub-line">${esc(t.closure_code)}</div>` : ''}</td><td class="r num">${fmtMoney(t.amount)}</td>
+      <td>${t.verification ? (t.verification.passed ? '<span class="badge st-SUCCESS">PASS</span>' : '<span class="badge st-ERROR">FAIL</span>') : '<span class="faint">pending</span>'}</td>
+      <td>${esc((t.decision || {}).label || '')}<div class="sub-line">by ${esc(uname((t.decision || {}).by))} · ${esc(fmtLocal((t.decision || {}).at))}</div></td>
+      <td>${t.digest ? `reviewed by ${esc(uname(t.digest.by))}${t.digest.comment ? ' — “' + esc(t.digest.comment) + '”' : ''}` : `${t.flagged ? '<span class="sla sla-bad">unreviewed &gt; 1 business day</span> ' : ''}<input class="input f-comment" data-track placeholder="comment (optional)" style="max-width:200px"> <button class="btn sm primary" data-act="L0_REVIEW" type="button">Reviewed</button>`}</td></tr>`).join('');
+    return head('DRI digest — L0 review', 'Compensating control: every ticket the Analyst decided alone (L0) is reviewed by the DRI within 1 business day') +
+      `<div class="card">${d.items.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Ticket</th><th>Customer</th><th>Outcome</th><th class="r">Amount</th><th>Verifier</th><th>Decision</th><th>Review</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No L0 decisions in this scenario yet.</div>'}</div>`;
+  },
+};
+SCREENS.comms = {
+  live: true,
+  load: () => api('/api/comms'),
+  render(d) {
+    const card = t => `<div class="card${t.open ? ' action-panel' : ''}" data-ticket="${esc(t.ticket_id)}"><div class="card-head"><h2>${ticketLink(t.ticket_id)} ${typeBadge(t.type)} ${esc(t.customer_name)}${tagFor(t.account_id)}</h2><div class="tools">${prioBadge(t.priority)} ${stateBadge(t.state)}</div></div>
+      <div class="card-body"><p class="note">Open dispute / regulatory complaint: ${esc((t.flag || []).join(', '))}. Edits are logged with before and after.</p>${commsEditor(t, t.open && (t.allowed_actions || []).includes('APPROVE_COMMS'))}</div></div>`;
+    return head('Communications approval', 'The DRI approves every customer letter and regulator response when a dispute or regulatory flag applies') +
+      (d.items.length ? d.items.map(card).join('') : '<div class="card"><div class="empty">No flagged tickets awaiting communications approval in this scenario.</div></div>');
+  },
+};
+SCREENS.register = {
+  live: true,
+  load: () => api('/api/register'),
+  render(d) {
+    const canExport = lvl('register') === 'A';
+    const rows = d.entries.map(e => `<tr><td><b>${esc(e.signature)}</b></td><td>${e.tickets.map(t => `${ticketLink(t.ticket_id)} ${esc(t.customer_name)}${tagFor(t.account_id)} ${stateBadge(t.state)}`).join('<br>')}</td>
+      <td class="r num">${e.affected_accounts}</td><td class="mono">${esc(e.wo_ids.join(', '))}<div class="sub-line">${esc(e.msg_ids.join(', '))}</div></td><td class="num">${esc(e.first_seen)}</td><td class="num">${esc(e.last_seen)}</td></tr>`).join('');
+    return head('Root-cause register', 'Read-only: integration error signatures from G4 tickets. Fixing them is outside this workflow (engineering handoff).',
+      canExport ? '<button class="btn primary" data-action="register-export" type="button">Export "Engineering handoff" CSV</button>' : '<span class="note">Export: DRI only</span>') +
+      `<div class="card">${d.entries.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Signature</th><th>Linked tickets</th><th class="r">Accounts</th><th>Work orders / messages</th><th>First seen</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No root causes recorded in this scenario yet.</div>'}</div>`;
+  },
+};
+
+/* ---------- Audit log ---------- */
+SCREENS.audit = {
+  load: async () => { const qs = new URLSearchParams(Object.entries(S.auditF).filter(([, v]) => v)).toString(); return api('/api/audit?' + qs); },
+  render(d) {
+    const f = S.auditF;
+    const opt = (vals, c, all) => `<option value="">${all}</option>` + vals.map(([v, l]) => `<option value="${esc(v)}"${v === c ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    const scs = (curDs() || { scenarios: [] }).scenarios.map(s => [s.scenario_id, s.scenario_id]);
+    return head('Audit log', 'Append-only · SHA-256 hash chain · state/audit_log.jsonl · visible to all three personas',
+      '<button class="btn" data-action="audit-export" type="button">Export CSV</button><button class="btn primary" data-action="audit-verify" type="button">Verify integrity</button>') +
+      `${S.auditVerify ? `<div class="overall ${S.auditVerify.ok ? 'pass' : 'fail'}"><span class="o-big">${S.auditVerify.ok ? '✓ Chain intact' : '✗ Broken link'}</span><span class="o-sub">${S.auditVerify.ok ? `${S.auditVerify.events} events re-hashed; no breaks.` : `First broken link at line ${S.auditVerify.first_broken.line} (${esc(S.auditVerify.first_broken.event_id || '?')}): ${esc(S.auditVerify.first_broken.reason)}`}</span></div>` : ''}
+      <div class="card"><div class="card-body"><div class="grid-filters">
+        <select class="input" data-af="user">${opt(S.users.map(u => [u.user_id, u.name + ' (' + u.persona + ')']).concat([['sys.gate', 'Pre-bill gate'], ['agent.investigator', 'Investigation agent'], ['agent.executor', 'Execution agent'], ['sys.verifier', 'Verifier'], ['sys.cli', 'System (startup)']]), f.user, 'All actors')}</select>
+        <select class="input" data-af="persona">${opt(Object.keys(PERSONA_LABEL).map(r => [r, PERSONA_LABEL[r]]).concat([['AGENT', 'Agents'], ['SYSTEM', 'System']]), f.persona, 'All personas')}</select>
+        <select class="input" data-af="action">${opt(d.actions.map(a => [a, a]), f.action, 'All actions')}</select>
+        <select class="input" data-af="scenario">${opt(scs, f.scenario, 'All scenarios')}</select>
+        <input class="input" data-af="ticket" placeholder="Ticket id, e.g. BEX-1101" value="${esc(f.ticket || '')}">
+        <input class="input" type="date" data-af="from" value="${esc(f.from || '')}" aria-label="From date"><input class="input" type="date" data-af="to" value="${esc(f.to || '')}" aria-label="To date">
+        <input class="input" type="search" data-af="q" placeholder="Free-text search" value="${esc(f.q || '')}">
+      </div><div class="btn-row"><button class="btn primary" data-action="audit-apply" type="button">Apply filters</button><button class="btn" data-action="audit-clear" type="button">Clear</button><span class="note">${d.total.toLocaleString()} matching event(s)${d.total > d.events.length ? ' · newest ' + d.events.length + ' shown' : ''}</span></div></div></div>
+      <div class="card">${feedTable(d.events)}</div>`;
   },
 };
 
@@ -1696,19 +1730,33 @@ SCREENS.backscan = {
     else if (state.lastDsId !== S.dsId) state.banner = d.warnings.length ? { kind: 'warn', html: `<b>Loaded with warnings:</b> ${d.warnings.map(esc).join(' · ')}` } : null;
     state.lastDsId = S.dsId;
     state.result = detect(d.ix, { asOf: state.asOf, scanStart: state.scan.scanStart, scanEnd: state.scan.scanEnd });
+    S.bsCand = null;
+    if (!S.offline) { try { S.bsCand = await api('/api/backscan/candidates'); } catch (e) { S.bsCand = null; } }
     renderSourceLine();
     prefetchOthers();
     return null;
   },
   render() { return backscanHtml(); },
 };
+/* Per-row "Send to workflow" (rules v2.0 §12): FINDING + UNMATCHED rows eligible; REVIEW rows are out of scope. */
+function sendCell(woId) {
+  if (S.offline || !S.bsCand) return '';
+  const r = S.bsCand.rows.find(x => x.wo_id === woId);
+  if (!r) return '<span class="faint">—</span>';
+  if (r.sent) return '<span class="wf-sent">✓ sent</span>';
+  if (!r.eligible) return `<button class="btn sm" type="button" disabled title="${esc(r.reason || 'Out of scope – revenue protection')}">Send to workflow</button>`;
+  if (lvl('backscan') !== 'A') return '<span class="faint">eligible</span>';
+  if (S.bsCand.scenario.kind !== 'BACKSCAN') return '<span class="faint" title="Switch the scenario to BACKSCAN_… to send">eligible</span>';
+  return `<button class="btn sm primary" type="button" data-send-wo="${esc(woId)}">Send to workflow</button>`;
+}
 function prefetchOthers() {
   (async () => { for (const m of source.list) if (!source.cache.has(m.id)) { try { await loadDataset(m); } catch (e) { /* shown when selected */ } } })();
 }
 function backscanHtml() {
   const isBS = curSc() && curSc().kind === 'BACKSCAN';
   const canSend = lvl('backscan') === 'A' && !S.offline;
-  const send = canSend ? (isBS ? '<button class="btn primary" data-action="send-backscan" type="button">Send findings to workflow</button>' : `<span class="note">To send findings to the workflow, switch the scenario to BACKSCAN_…</span>`) : '';
+  const nElig = S.bsCand ? S.bsCand.rows.filter(r => r.eligible && !r.sent).length : 0;
+  const send = canSend ? (isBS ? `<button class="btn primary" data-action="send-backscan" type="button"${nElig ? '' : ' disabled'}>Send all eligible (${nElig})</button>` : `<span class="note">To send findings to the workflow, switch the scenario to BACKSCAN_…</span>`) : '';
   return head('Back-scan / Daily check', 'POC 1 detector over the full extracts · OMS × CC&amp;B × MDM', send) + `
     <div class="card"><div class="card-body"><div class="controls-inner" style="padding:0">
       <div class="ctl"><span class="ctl-label">Dataset</span><div class="seg" id="dsSeg">${source.list.map(m => `<button type="button" data-ds="${esc(m.id)}" aria-pressed="${m.id === S.dsId}">${esc(m.name)}</button>`).join('')}</div></div>
@@ -1789,6 +1837,7 @@ function filteredFindings() {
 }
 function findingsCard(r) {
   const list = filteredFindings();
+  const wf = !S.offline && !!S.bsCand;
   const causes = [...new Set(r.back.findings.flatMap(f => f.causeCodes))];
   const opt = (v, l, cv) => `<option value="${esc(v)}"${v === cv ? ' selected' : ''}>${esc(l)}</option>`;
   const headRow = FINDING_COLS.map(c => { const on = state.sort.key === c.k; return `<th class="sortable${c.r ? ' r' : ''}" data-sort="${c.k}">${c.l}${on ? `<span class="arrow">${state.sort.dir > 0 ? '▲' : '▼'}</span>` : ''}</th>`; }).join('');
@@ -1796,12 +1845,12 @@ function findingsCard(r) {
       <td><span class="mono">${esc(f.accountId)}</span><div class="sub-line mono">${esc(f.saId)}</div></td><td>${esc(f.customer)}${tagFor(f.accountId)}</td>
       <td style="white-space:nowrap">${esc(f.cls)}<div class="sub-line">${esc(f.tariff)}</div></td><td>${sevBadge(f.severity)}</td><td class="r num">${f.billsAffected}</td><td class="r num">${f.postDays}</td>
       <td class="r num">${fmtKwh(f.phantomKwh)}${f.actualAfterKwh ? `<div class="sub-line">${fmtKwh(f.actualAfterKwh)} kWh actual, unbilled</div>` : ''}</td>
-      <td class="r num"><b>${fmtMoney(f.credit)}</b></td><td style="min-width:220px">${esc(f.cause)}</td><td>${ruleChips(f.rules)}</td></tr>`).join('');
+      <td class="r num"><b>${fmtMoney(f.credit)}</b></td><td style="min-width:220px">${esc(f.cause)}</td><td>${ruleChips(f.rules)}</td>${wf ? `<td>${sendCell(f.key)}</td>` : ''}</tr>`).join('');
   return `<div class="card"><div class="card-head"><h2>Back-scan findings<span class="count">${list.length} of ${r.back.findings.length}</span></h2>
       <div class="tools"><div class="filters"><label for="sevFilter">Severity</label><select id="sevFilter">${opt('ALL', 'All', state.sevFilter)}${['HIGH', 'MEDIUM', 'LOW', 'REVIEW'].map(s => opt(s, s, state.sevFilter)).join('')}</select>
         <label for="causeFilter">Cause</label><select id="causeFilter">${opt('ALL', 'All', state.causeFilter)}${causes.map(c => opt(c, CAUSE_FILTER_LABEL[c] || c, state.causeFilter)).join('')}</select></div>
         <button class="btn sm" data-action="export-findings">Export CSV</button></div></div>
-    ${list.length ? `<div class="table-wrap"><table class="grid"><thead><tr>${headRow}</tr></thead><tbody>${rows}<tr class="total"><td colspan="7">Total (filtered)</td><td class="r num">${fmtMoney(money(list.reduce((s, f) => s + f.credit, 0)))}</td><td colspan="2"></td></tr></tbody></table></div>` : '<div class="empty">No findings match the current filters.</div>'}
+    ${list.length ? `<div class="table-wrap"><table class="grid"><thead><tr>${headRow}${wf ? '<th>Workflow</th>' : ''}</tr></thead><tbody>${rows}<tr class="total"><td colspan="7">Total (filtered)</td><td class="r num">${fmtMoney(money(list.reduce((s, f) => s + f.credit, 0)))}</td><td colspan="${wf ? 3 : 2}"></td></tr></tbody></table></div>` : '<div class="empty">No findings match the current filters.</div>'}
     <div class="card-foot">Scan range ${esc(r.scan.scanStart)} → ${esc(r.scan.scanEnd)} · issued bills (FINAL / DISPUTED) only. Click a row for the timeline, calculation, evidence and related context.</div></div>`;
 }
 function dailyCard(r) {
@@ -1818,12 +1867,13 @@ function dailyCard(r) {
 }
 function unmatchedCard(r) {
   const list = state.mode === 'daily' ? r.daily.unmatched : r.back.unmatched;
+  const wf = !S.offline && !!S.bsCand && state.mode !== 'daily';
   const rows = list.map(u => `<tr class="clickable" tabindex="0" data-open="unmatched" data-key="${esc(u.wo.wo_id)}"><td class="mono">${esc(u.wo.wo_id)}${u.exposure ? tagFor(u.exposure.a.sa.account_id) : ''}<div class="sub-line">${esc(u.wo.wo_subtype)} · ${esc(u.wo.completed_at)}</div></td>
     <td class="mono"><b>${esc(u.recorded)}</b></td><td>${u.msg ? `${stBadge(u.msg)} <span class="mono">${esc(u.msg.msg_id)}</span><div class="sub-line">${esc(u.msg.error_message || '—')}</div>` : '<span class="faint">no message</span>'}</td>
     <td>${u.suggestion ? `<span class="mono"><b>${esc(u.suggestion.premise)}</b></span>${u.exposure && u.exposure.a.account ? ' · ' + esc(u.exposure.a.account.customer_name) : ''}<div class="sub-line">${esc(u.suggestion.note)}${u.suggestions.length > 1 ? ` · ${u.suggestions.length - 1} other candidate(s)` : ''}</div>` : '<span class="faint">no near match</span>'}</td>
-    <td class="r num">${u.exposure ? `<b>${fmtMoney(u.exposure.total)}</b><div class="sub-line">consumption ${fmtMoney(u.exposure.consCredit)} + fixed ${fmtMoney(u.exposure.fixedCredit)}</div>` : '—'}</td></tr>`).join('');
+    <td class="r num">${u.exposure ? `<b>${fmtMoney(u.exposure.total)}</b><div class="sub-line">consumption ${fmtMoney(u.exposure.consCredit)} + fixed ${fmtMoney(u.exposure.fixedCredit)}</div>` : '—'}</td>${wf ? `<td>${sendCell(u.wo.wo_id)}</td>` : ''}</tr>`).join('');
   return `<div class="card"><div class="card-head"><h2>Unmatched disconnects<span class="count">${list.length}</span></h2><div class="tools"><span class="note">C3 — ID mismatch</span></div></div>
-    ${list.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Work order</th><th>Premise ID as recorded</th><th>Integration error</th><th>Suggested match</th><th class="r">Potential exposure if linked</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">Every completed disconnect resolved through ref_id_crosswalk.</div>'}</div>`;
+    ${list.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Work order</th><th>Premise ID as recorded</th><th>Integration error</th><th>Suggested match</th><th class="r">Potential exposure if linked</th>${wf ? '<th>Workflow</th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">Every completed disconnect resolved through ref_id_crosswalk.</div>'}</div>`;
 }
 function legendCard() {
   return `<div class="card"><details class="legend"><summary>Detection rules, causes and severity</summary><div class="legend-grid"><dl>${Object.entries(RULES).map(([k, v]) => `<dt><span class="rule">${k}</span></dt><dd>${esc(v)}</dd>`).join('')}
@@ -2015,9 +2065,10 @@ function explorerTable(d) {
   if (!S.sandbox) return { headers: base.headers, rows: base.rows, ov: new Map() };
   const ovs = S.sandbox.overlays.filter(o => o.file === file);
   const headers = base.headers.length ? base.headers.slice() : [...new Set(ovs.flatMap(o => Object.keys(o.row)))];
-  const kf = { 'oms_work_orders.csv': 'wo_id', 'ccb_service_agreements.csv': 'sa_id', 'ccb_bill_segments.csv': 'bill_id', 'mdm_daily_reads.csv': 'read_id', 'ccb_todo_entries.csv': 'todo_id', 'crm_cases.csv': 'case_id', 'integration_message_log.csv': 'msg_id', sandbox_credit_memos: 'memo_id' }[file];
+  const KF = { 'oms_work_orders.csv': 'wo_id', 'ccb_service_agreements.csv': 'sa_id', 'ccb_bill_segments.csv': 'bill_id', 'mdm_daily_reads.csv': 'read_id', 'ccb_todo_entries.csv': 'todo_id', 'crm_cases.csv': 'case_id', 'integration_message_log.csv': 'msg_id', sandbox_credit_memos: 'memo_id', sandbox_letters: 'letter_id' };
   const rows = base.rows.slice(), ov = new Map();
   for (const o of ovs) {
+    const kf = o.key_field || KF[file];
     const i = kf ? rows.findIndex(r => r[kf] === o.key) : -1;
     const merged = Object.assign({}, i >= 0 ? rows[i] : {}, o.row);
     for (const k of Object.keys(o.row)) if (!headers.includes(k)) headers.push(k);
@@ -2028,7 +2079,8 @@ function explorerTable(d) {
 }
 function explorerHtml() {
   const d = cur();
-  const files = FILE_NAMES.filter(n => d.files[n]).concat(S.sandbox ? ['sandbox_credit_memos'] : []);
+  const VIRT = { sandbox_credit_memos: 'Sandbox · credit memos', sandbox_letters: 'Sandbox · letters & responses' };
+  const files = FILE_NAMES.filter(n => d.files[n]).concat(S.sandbox ? Object.keys(VIRT) : []);
   if (!files.includes(state.explorer.file)) state.explorer.file = files[0];
   const t = explorerTable(d);
   const terms = state.explorer.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -2042,7 +2094,7 @@ function explorerHtml() {
   return head('Data Explorer', `${esc(curDs() ? curDs().name : '')} · read-only source files${sandbox ? ' + sandbox overlays for ' + esc(S.scId) : ''}`) + `
     <div class="card"><div class="card-head"><div class="explorer-tools">
         <div class="seg" id="sbxSeg"><button type="button" data-sbx="base" aria-pressed="${!sandbox}">Base</button><button type="button" data-sbx="sandbox" aria-pressed="${sandbox}"${S.offline ? ' disabled' : ''}>Sandbox${sandbox ? ` (${nOv})` : ''}</button></div>
-        <select id="filePick">${files.map(n => `<option value="${n}"${n === state.explorer.file ? ' selected' : ''}>${n === 'sandbox_credit_memos' ? 'Sandbox · credit memos' : esc(SN[SCHEMA[n].sys]) + ' · ' + n} (${(n === state.explorer.file ? t.rows.length : (d.files[n] ? d.files[n].rows.length : S.sandbox.overlays.filter(o => o.file === n).length)).toLocaleString()})</option>`).join('')}</select>
+        <select id="filePick">${files.map(n => `<option value="${n}"${n === state.explorer.file ? ' selected' : ''}>${VIRT[n] ? VIRT[n] : esc(SN[SCHEMA[n].sys]) + ' · ' + n} (${(n === state.explorer.file ? t.rows.length : (d.files[n] ? d.files[n].rows.length : S.sandbox.overlays.filter(o => o.file === n).length)).toLocaleString()})</option>`).join('')}</select>
         <input type="search" id="explorerQ" placeholder="Search (all words must match)…" value="${esc(state.explorer.q)}" aria-label="Search">
         <span class="note">${rows.length.toLocaleString()} of ${t.rows.length.toLocaleString()} rows · ${t.headers.length} columns${sandbox ? ` · ${t.ov.size} overlaid row(s) highlighted` : ''}</span></div>
       <div class="pager"><button class="btn sm" data-action="page-prev"${state.explorer.page ? '' : ' disabled'}>‹ Prev</button><span class="note num">${rows.length ? `${p0 + 1}–${p0 + view.length}` : 0} · page ${state.explorer.page + 1}/${pages}</span><button class="btn sm" data-action="page-next"${state.explorer.page < pages - 1 ? '' : ' disabled'}>Next ›</button></div></div>
@@ -2071,15 +2123,20 @@ function selftestHtml() {
   if (S.offline) server = '<div class="card"><div class="muted-box">Server self-test needs server.py (gate, agents, workflow and audit tests run on the server).</div></div>';
   else if (S.testing || !st) server = '<div class="card"><div class="working"><span class="spinner"></span> Running server self-test (gate replays, agents, end-to-end workflow, guardrails)…</div></div>';
   else if (st.error) server = `<div class="panel error"><h2>Self-test could not run</h2><p>${esc(st.error)}</p></div>`;
-  else server = `<div class="overall ${st.pass ? 'pass' : 'fail'}"><span class="o-big">${st.pass ? '✓ ALL PASS' : '✗ FAILURES'}</span><span class="o-sub">Server self-test: ${st.checks} checks, ${st.failed} failed, ${st.elapsed_ms} ms · isolated in-memory state and audit log, agent latency 0 · expectations from config/expected_gate_results.json and answer_key.csv</span>
+  else server = `<div class="overall ${st.pass ? 'pass' : 'fail'}"><span class="o-big">${st.pass ? '✓ ALL PASS' : '✗ FAILURES'}</span><span class="o-sub">Server self-test: ${st.checks} checks, ${st.failed} failed, ${st.elapsed_ms} ms · isolated in-memory state and audit log, fixed demo clock, agent latency 0 · expectations from config/expected_results.json and answer_key.csv</span>
       <button class="btn sm" data-action="run-server-test" type="button" style="margin-left:auto">Run again</button></div>` +
     st.groups.map(g => `<div class="card"><details class="legend"${g.pass ? '' : ' open'}><summary>${g.pass ? '<span class="res pass">PASS</span>' : '<span class="res fail">FAIL</span>'} ${esc(g.name)} <span class="count muted">${g.rows.filter(r => r.pass).length}/${g.rows.length}</span></summary>
       <div class="table-wrap"><table class="grid compact"><thead><tr><th>Check</th><th>Expected</th><th>Actual</th><th>Result</th></tr></thead><tbody>${g.rows.map(r => `<tr><td>${esc(r.check)}</td><td class="mono">${esc(r.expected)}</td><td class="mono">${esc(r.actual)}</td><td><span class="res ${r.pass ? 'pass' : 'fail'}">${r.pass ? 'PASS' : 'FAIL'}</span></td></tr>`).join('')}</tbody></table></div></details></div>`).join('');
-  const demo = !S.offline && S.demoTools ? `<div class="card demo-card"><div class="card-head"><h2>Demo tools</h2><span class="note">every action is written to the audit log</span></div><div class="card-body">
+  const a = S.alerts || {};
+  const demo = !S.offline ? `<div class="card demo-card"><div class="card-head"><h2>Demo tools</h2><span class="note">every action is written to the audit log · scenario ${esc(S.scId)}</span></div><div class="card-body">
       <button class="btn" data-action="reset-current" type="button">Reset demo state — ${esc(S.scId)}</button><button class="btn" data-action="reset-all" type="button">Reset all scenarios</button>
       <button class="btn danger" data-action="arm-failure" type="button">Inject failure on next step</button><button class="btn" data-action="disarm-failure" type="button">Disarm</button>
-      <span class="note">Reset clears case state and sandbox and appends DEMO_RESET; the audit log is never deleted (only <span class="mono">py server.py --reset --purge-log</span> can clear it).</span></div></div>`
-    : (!S.offline ? '<div class="card"><div class="muted-box">Demo tools are not available to the read-only Auditor role.</div></div>' : '');
+      <span class="ctl"><label class="ctl-label" for="clockHours">Advance demo clock</label><input class="input" type="number" id="clockHours" min="1" max="200" value="9" style="width:80px"> <span class="note">hours</span>
+        <button class="btn" data-action="advance-clock" type="button">Advance</button></span>
+      <span class="note">Now: <b>${esc(fmtLocal(a.now) || '—')}</b>${a.clock_offset_hours ? ` (+${Math.round(a.clock_offset_hours * 10) / 10}h)` : ''} · business hours Mon–Fri 08:00–17:00 (1 business day = 9 h)</span>
+      <button class="btn primary" data-action="run-autopilot" type="button"${a.autopilot && a.autopilot.running ? ' disabled' : ''}>Run end-to-end (autopilot)</button>
+      <span class="note">Autopilot runs the gate and plays each persona's recommended actions in order; every event is flagged “performed by demo autopilot”. Reset clears tickets and sandbox and appends DEMO_RESET; the audit log is never deleted (only <span class="mono">py server.py --reset --purge-log</span> can clear it).</span></div></div>`
+    : '';
   return head('Self-test & demo tools', 'Deterministic checks against the expected results') + demo + server + poc1SelfTestHtml();
 }
 function poc1SelfTestHtml() {
@@ -2150,7 +2207,7 @@ async function onFolderChosen(fileList) {
   source.mode = 'local'; source.list = list; source.cache.clear();
   S.datasets = list.map(d => Object.assign({}, d, { files_present: d.present }));
   S.dsId = (list.find(d => /dataset_A/i.test(d.folder)) || list[0]).id; state.dsId = S.dsId; S.scId = null;
-  S.me = { user_id: '', name: 'Local folder', role: 'LOCAL', title: 'POC 1 detector only' };
+  S.me = { user_id: '', name: 'Local folder', persona: 'LOCAL', title: 'POC 1 detector only' };
   S.perms = { backscan: 'V', explorer: 'V', selftest: 'V' }; S.labels = { backscan: 'Back-scan / Daily', explorer: 'Data Explorer', selftest: 'Self-test' };
   $('#stage').hidden = true; $('#shell').hidden = false; $('#hdrControls').hidden = true;
   renderSourceLine();
@@ -2159,40 +2216,39 @@ async function onFolderChosen(fileList) {
 
 /* ---------- Events ---------- */
 function gotoExplorer(file, q) { state.explorer = { file, q, page: 0, mode: state.explorer.mode || 'base' }; state.detail = null; renderDrawer(); go('explorer'); window.scrollTo({ top: 0 }); }
-async function post(path, body, okMsg) {
-  S.busy = true;
-  try { const r = await api(path, { method: 'POST', body: body || {} }); if (okMsg) toast(okMsg); return r; }
-  catch (e) { toast(e.message, true); return null; }
-  finally { S.busy = false; S.last = {}; await route(true); refresh(); }
+const REASON_REQUIRED = ['CHANGE_PRIORITY', 'REQUEST_CANCELLATION', 'APPROVE_CANCELLATION', 'CANCEL_DUPLICATE', 'FINANCE_REJECT', 'RETURN_PLAN', 'REOPEN'];
+async function onAct(t) {
+  const holder = t.closest('[data-ticket]'); if (!holder) return;
+  const tid = holder.dataset.ticket, a = t.dataset.act;
+  const box = t.closest('.act-sec') || holder;
+  const val = sel => { const el = box.querySelector(sel); return el ? el.value : undefined; };
+  const reasonSel = { CHANGE_PRIORITY: '.f-reason-prio', REQUEST_CANCELLATION: '.f-reason-cancel', CANCEL_DUPLICATE: '.f-reason-dup' }[a] || '.f-reason';
+  const payload = { reason: (val(reasonSel) || '').trim() };
+  if (a === 'CONFIRM_MATCH' || a === 'REJECT_MATCH') { payload.note = (val('.f-note') || '').trim(); if (!payload.note) { toast('An evidence note is required for the ID-match decision.', true); return; } }
+  if (a === 'CHANGE_PRIORITY') payload.direction = t.dataset.dir;
+  if (a === 'CONFIRM_TRIAGE') { payload.proposed_option = val('.f-proposed'); const d = box.querySelector('.f-decide'); payload.decide = !!(d && d.checked); }
+  if (a === 'CANCEL_DUPLICATE') payload.duplicate_of = (val('.f-dup') || '').trim();
+  if (a === 'DECIDE') { const o = box.querySelector('input[name="opt"]:checked'); if (!o) { toast('Choose an option first', true); return; } payload.option_id = o.value; }
+  if (a === 'L0_REVIEW') payload.comment = (val('.f-comment') || '').trim();
+  if (a === 'EDIT_COMMS' || a === 'APPROVE_COMMS') { if (box.querySelector('.f-letter')) { payload.customer_letter = val('.f-letter'); payload.regulator_response = val('.f-response'); } }
+  if (REASON_REQUIRED.includes(a) && !payload.reason) { toast('A written reason is required (SoD-5).', true); return; }
+  try { await act(tid, a, payload); } catch (err) { /* toast shown */ }
 }
 document.addEventListener('click', async e => {
-  const t = e.target.closest('button, tr[data-open], tr[data-goto-case], tr[data-work], th[data-sort], a[data-nav]');
+  const t = e.target.closest('button, tr[data-open], tr[data-goto-ticket], tr[data-work], th[data-sort], a[data-nav]');
   if (!t) { if (e.target.id === 'scrim') { state.detail = null; renderDrawer(); } return; }
   if (t.dataset.signin) { signIn(t.dataset.signin); return; }
   if (t.dataset.nav) return;   // normal hash link
-  if (t.dataset.gotoCase) { go('case', t.dataset.gotoCase); return; }
-  if (t.dataset.work) { const w = JSON.parse(t.dataset.work); if (w.case_id && can('case_detail')) go('case', w.case_id); else go(w.screen || 'mywork'); return; }
-  if (t.dataset.act) {
-    const box = t.closest('[data-case]'); if (!box) return;
-    const val = sel => { const el = box.querySelector(sel); return el ? el.value : undefined; };
-    const payload = { reason: (val('.f-reason') || '').trim() };
-    const a = t.dataset.act;
-    if (a === 'DECIDE') { const o = box.querySelector('input[name="opt"]:checked'); if (!o) { toast('Choose an option first', true); return; } payload.option_id = o.value; }
-    if (a === 'FIELD_OUTCOME') payload.outcome = val('.f-outcome');
-    if (a === 'EDIT_COMMS' || a === 'APPROVE_COMMS') { if (box.querySelector('.f-letter')) { payload.customer_letter = val('.f-letter'); payload.regulator_response = val('.f-response'); } }
-    if (['REJECT_MATCH', 'CLOSE_NO_ACTION', 'FINANCE_REJECT', 'REJECT_PLAN', 'REJECT_COMMS'].includes(a) && !payload.reason) { toast('A written reason is required.', true); return; }
-    try {
-      if (a === 'APPROVE_COMMS' && payload.customer_letter !== undefined) await act(box.dataset.case, 'EDIT_COMMS', payload);
-      await act(box.dataset.case, a, payload);
-    } catch (err) { /* toast shown */ }
+  if (e.target.closest('a[href^="#/"]') && t.tagName === 'TR') return;   // link inside a clickable row
+  if (t.dataset.gotoTicket) { go('ticket', t.dataset.gotoTicket); return; }
+  if (t.dataset.work) { const w = JSON.parse(t.dataset.work); if (w.ticket_id && can('ticket')) go('ticket', w.ticket_id); else go(w.screen || 'mywork'); return; }
+  if (t.dataset.act) { await onAct(t); return; }
+  if (t.dataset.ticketRelease) { try { await act(t.dataset.ticketRelease, 'RELEASE', {}); } catch (err) { /* toast shown */ } return; }
+  if (t.dataset.sendWo) {
+    const r = await post('/api/backscan/send', { wo_ids: [t.dataset.sendWo] }, null);
+    if (r) toast(r.tickets.length ? `${r.tickets.join(', ')} created — the investigation agent is working` : 'Attached to an existing ticket');
     return;
   }
-  if (t.dataset.issueAct) {
-    const box = t.closest('[data-issue]'); const tk = box.querySelector('.f-ticket');
-    await post(`/api/integration/issues/${encodeURIComponent(box.dataset.issue)}`, { action: t.dataset.issueAct, ticket_ref: tk ? tk.value : null }, 'Integration issue updated');
-    return;
-  }
-  if (t.dataset.release) { await post('/api/bills/release', { bill_ids: [t.dataset.release] }, 'Bill released'); return; }
   if (t.dataset.feed) { S.feed = t.dataset.feed; S.last = {}; route(true); return; }
   if (t.dataset.billfilter) { S.billFilter = t.dataset.billfilter; S.last = {}; route(true); return; }
   if (t.dataset.sbx) { state.explorer.mode = t.dataset.sbx; route(true); return; }
@@ -2211,7 +2267,16 @@ document.addEventListener('click', async e => {
     case 'switch-user': showSignIn(); break;
     case 'run-gate': await post('/api/gate/run', {}, 'Gate run complete — agents are investigating the held bills'); break;
     case 'release-passed': await post('/api/bills/release', { all_passed: true }, 'Passed bills released'); break;
-    case 'send-backscan': { const r = await post('/api/backscan/send', {}, null); if (r) { toast(`${r.cases.length} case(s) created — agents are investigating`); go('cases'); } break; }
+    case 'send-backscan': { const r = await post('/api/backscan/send', {}, null); if (r) { toast(`${r.tickets.length} ticket(s) created — agents are investigating`); go('tickets'); } break; }
+    case 'register-export': try { exportCSV('engineering_handoff.csv', await api('/api/register/export', { raw: true })); } catch (err) { toast(err.message, true); } break;
+    case 'advance-clock': {
+      const h = +($('#clockHours') || {}).value || 0;
+      if (h <= 0) { toast('Enter a positive number of hours', true); break; }
+      const r = await post('/api/demo/clock', { hours: h }, null);
+      if (r) { S.alerts = Object.assign({}, S.alerts, { now: r.now, clock_offset_hours: r.offset_hours }); renderAlerts(); toast(`Demo clock advanced ${h}h — now ${fmtLocal(r.now)}; SLA checks ran`); if (S.route.screen === 'selftest') $('#view').innerHTML = selftestHtml(); }
+      break;
+    }
+    case 'run-autopilot': if (confirm(`Run the end-to-end autopilot on ${S.scId}? It resets nothing: it continues from the current state, playing each persona's recommended actions. Every event is flagged as autopilot.`)) { const r = await post('/api/demo/autopilot', {}, 'Autopilot started — watch the Dashboard and Tickets'); if (r) go('dashboard'); } break;
     case 'audit-apply': S.auditF = {}; document.querySelectorAll('[data-af]').forEach(el => { if (el.value) S.auditF[el.dataset.af] = el.value; }); route(true); break;
     case 'audit-clear': S.auditF = {}; S.auditVerify = null; route(true); break;
     case 'audit-verify': try { S.auditVerify = await api('/api/audit/verify', { method: 'POST', body: {} }); route(true); } catch (err) { toast(err.message, true); } break;

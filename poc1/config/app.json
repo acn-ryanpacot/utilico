@@ -1,7 +1,11 @@
 {
-  "_comment": "Scenario and workflow settings. extract_date is the 'as of' date of the BACKSCAN scenario.",
+  "_comment": "Scenario and DoA thresholds (workflow_rules.md v2.0 §7, §9). extract_date is the 'as of' date of the BACKSCAN scenario.",
   "extract_date": "2026-11-10",
+  "l0_max_amount": 50.00,
   "finance_threshold": 1000.00,
+  "impact_medium_min": 250.00,
+  "impact_high_min": 1000.00,
+  "bills_modifier_min": 3,
   "max_agent_tool_calls": 12,
-  "regulatory_crm_categories": ["BILLING_DISPUTE", "REGULATORY_COMPLAINT"]
+  "flag_crm_categories": ["BILLING_DISPUTE", "REGULATORY_COMPLAINT"]
 }

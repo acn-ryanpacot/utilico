@@ -1,0 +1,108 @@
+{
+  "_comment": "Expected gate outcomes, routing, investigation output and autopilot results (workflow_rules.md v2.0 Appendix A + update prompt §14). Case codes (E1..E7, N1..N5) map to accounts via answer_key.csv customer_name. after = 0 with action CANCEL means the draft is cancelled. Amount = reduction on the held draft or credit on issued bills.",
+  "money_tolerance": 0.01,
+  "never_ticketed": ["E6", "N1", "N2", "N3", "N4", "N5"],
+  "datasets": {
+    "dataset_A_with_errors": {
+      "RUN_2026-09-02": {
+        "tickets": [
+          {"case": "E2", "type": "PREVENT", "bill_id": "BL-4400214-202608", "before": 190.28, "after": 60.70, "action": "REGENERATE", "amount": 129.58, "priority": "P3", "doa": "L1"}
+        ]
+      },
+      "RUN_2026-10-02": {
+        "tickets": [
+          {"case": "E2", "type": "PREVENT", "bill_id": "BL-4400214-202609", "before": 176.70, "after": 0.00, "action": "CANCEL", "amount": 176.70, "priority": "P3", "doa": "L1"},
+          {"case": "E2", "type": "REMEDIATE", "bills": ["BL-4400214-202608"], "amount": 129.58, "priority": "P4", "doa": "L2"},
+          {"case": "E3", "type": "PREVENT", "bill_id": "BL-4400417-202609", "before": 1373.26, "after": 1193.26, "action": "REGENERATE", "amount": 180.00, "priority": "P3", "doa": "L1", "via": "G5"},
+          {"case": "E4", "type": "PREVENT", "bill_id": "BL-4400322-202609", "before": 161.60, "after": 108.68, "action": "REGENERATE", "amount": 52.92, "fixed_retained": 11.90, "priority": "P3", "doa": "L1"}
+        ]
+      },
+      "RUN_2026-11-02": {
+        "tickets": [
+          {"case": "E1", "type": "PREVENT", "bill_id": "BL-4400101-202610", "before": 2574.96, "after": 1138.46, "action": "REGENERATE", "amount": 1436.50, "priority": "P1", "doa": "L2", "closure": "RESOLVED_CORRECTED"},
+          {"case": "E2", "type": "PREVENT", "bill_id": "BL-4400214-202610", "before": 182.59, "after": 0.00, "action": "CANCEL", "amount": 182.59, "priority": "P2", "doa": "L1", "closure": "RESOLVED_DRAFT_CANCELLED"},
+          {"case": "E2", "type": "REMEDIATE", "bills": ["BL-4400214-202608", "BL-4400214-202609"], "amount": 306.28, "priority": "P3", "doa": "L2", "closure": "RESOLVED_CREDIT_POSTED"},
+          {"case": "E3", "type": "PREVENT", "bill_id": "BL-4400417-202610", "before": 697.50, "after": 0.00, "action": "CANCEL", "amount": 697.50, "priority": "P2", "doa": "L1", "via": "G5", "closure": "RESOLVED_DRAFT_CANCELLED"},
+          {"case": "E3", "type": "REMEDIATE", "bills": ["BL-4400417-202609"], "amount": 180.00, "priority": "P4", "doa": "L2", "via": "G5", "closure": "RESOLVED_CREDIT_POSTED"},
+          {"case": "E5", "type": "PREVENT", "bill_id": "BL-4400388-202610", "before": 194.43, "after": 180.13, "action": "REGENERATE", "amount": 14.30, "priority": "P3", "doa": "L0", "closure": "RESOLVED_CORRECTED"},
+          {"case": "E7", "type": "ADVANCE", "bill_id": "BL-4400512-202610", "amount": 0.00, "priority": "P4", "doa": "L0", "stop_effective": "2026-11-01", "closure": "RESOLVED_ACCOUNT_FIXED"}
+        ],
+        "totals": {"prevented": 2330.89, "remediated": 486.28},
+        "register": [
+          {"signature": "Stop SA rejected – pending bill segment", "cases": ["E1"]},
+          {"signature": "No CC&B mapping for MOVE_OUT", "cases": ["E2"]},
+          {"signature": "Premise not found in cross-reference", "cases": ["E3"]},
+          {"signature": "Unprocessed at bill run (delivery delay)", "cases": ["E5"]},
+          {"signature": "Timeout calling CC&B", "cases": ["E7"]}
+        ]
+      },
+      "BACKSCAN_2026-11-10": {
+        "send_all": true,
+        "send_disabled": ["E6"],
+        "tickets": [
+          {"case": "E1", "type": "REMEDIATE", "amount": 1436.50, "priority": "P1", "doa": "L2", "comms_approval": true, "flag_crm": ["CASE-300276", "CASE-300287"]},
+          {"case": "E2", "type": "REMEDIATE", "amount": 488.87, "priority": "P2", "doa": "L2"},
+          {"case": "E3", "type": "REMEDIATE", "amount": 877.50, "priority": "P3", "doa": "L2", "via": "G5"},
+          {"case": "E4", "type": "REMEDIATE", "amount": 52.92, "priority": "P4", "doa": "L2"},
+          {"case": "E5", "type": "REMEDIATE", "amount": 14.30, "priority": "P4", "doa": "L2"}
+        ],
+        "drive_to_state": {"case": "E1", "type": "REMEDIATE", "state": "COMMS_APPROVAL"}
+      }
+    },
+    "dataset_B_two_errors_corrected": {
+      "RUN_2026-09-02": {"tickets": []},
+      "RUN_2026-10-02": {
+        "tickets": [
+          {"case": "E3", "type": "PREVENT", "bill_id": "BL-4400417-202609", "before": 1373.26, "after": 1193.26, "action": "REGENERATE", "amount": 180.00, "priority": "P3", "doa": "L1", "via": "G5"},
+          {"case": "E4", "type": "PREVENT", "bill_id": "BL-4400322-202609", "before": 161.60, "after": 108.68, "action": "REGENERATE", "amount": 52.92, "fixed_retained": 11.90, "priority": "P3", "doa": "L1"}
+        ]
+      },
+      "RUN_2026-11-02": {
+        "tickets": [
+          {"case": "E1", "type": "PREVENT", "bill_id": "BL-4400101-202610", "before": 2574.96, "after": 1138.46, "action": "REGENERATE", "amount": 1436.50, "priority": "P1", "doa": "L2", "closure": "RESOLVED_CORRECTED"},
+          {"case": "E3", "type": "PREVENT", "bill_id": "BL-4400417-202610", "before": 697.50, "after": 0.00, "action": "CANCEL", "amount": 697.50, "priority": "P2", "doa": "L1", "via": "G5", "closure": "RESOLVED_DRAFT_CANCELLED"},
+          {"case": "E3", "type": "REMEDIATE", "bills": ["BL-4400417-202609"], "amount": 180.00, "priority": "P4", "doa": "L2", "via": "G5", "closure": "RESOLVED_CREDIT_POSTED"},
+          {"case": "E7", "type": "ADVANCE", "bill_id": "BL-4400512-202610", "amount": 0.00, "priority": "P4", "doa": "L0", "stop_effective": "2026-11-01", "closure": "RESOLVED_ACCOUNT_FIXED"}
+        ],
+        "totals": {"prevented": 2134.00, "remediated": 180.00},
+        "register": [
+          {"signature": "Stop SA rejected – pending bill segment", "cases": ["E1"]},
+          {"signature": "Premise not found in cross-reference", "cases": ["E3"]},
+          {"signature": "Timeout calling CC&B", "cases": ["E7"]}
+        ]
+      },
+      "BACKSCAN_2026-11-10": {
+        "send_all": true,
+        "send_disabled": ["E6"],
+        "tickets": [
+          {"case": "E1", "type": "REMEDIATE", "amount": 1436.50, "priority": "P1", "doa": "L2", "comms_approval": true, "flag_crm": ["CASE-300276", "CASE-300287"]},
+          {"case": "E3", "type": "REMEDIATE", "amount": 877.50, "priority": "P3", "doa": "L2", "via": "G5"},
+          {"case": "E4", "type": "REMEDIATE", "amount": 52.92, "priority": "P4", "doa": "L2"}
+        ]
+      }
+    }
+  },
+  "investigations": {
+    "dataset": "dataset_A_with_errors",
+    "rows": [
+      {"scenario": "RUN_2026-11-02", "case": "E1", "type": "PREVENT", "probable_cause": "C2", "recommended_option": "CORRECT_AND_REBILL", "label": "Correct and rebill",
+       "must_cite": ["WO-104242", "MSG-550018", "TD-7701", "CASE-300265"]},
+      {"scenario": "RUN_2026-11-02", "case": "E2", "type": "PREVENT", "probable_cause": "C1", "recommended_option": "CORRECT_AND_REBILL", "label": "Correct and rebill",
+       "must_cite": ["WO-104249", "MSG-550021"]},
+      {"scenario": "RUN_2026-11-02", "case": "E3", "type": "PREVENT", "probable_cause": "C3", "recommended_option": "CORRECT_AND_REBILL", "label": "Correct and rebill",
+       "must_cite": ["WO-104256", "MSG-550024", "PRM-00417"], "corroborating_read_date": "2026-09-23"},
+      {"scenario": "RUN_2026-11-02", "case": "E5", "type": "PREVENT", "probable_cause": "C6", "recommended_option": "PROCESS_STOP_THEN_FINAL", "label": "Process stop now, then final-bill",
+       "must_cite": ["WO-104277", "MSG-550033"], "msg_status_at_scenario": {"MSG-550033": "UNPROCESSED"}},
+      {"scenario": "RUN_2026-11-02", "case": "E7", "type": "ADVANCE", "probable_cause": "C2", "recommended_option": "CORRECT_AND_REBILL", "label": "Correct and rebill (stop SA effective 2026-11-01)",
+       "must_cite": ["WO-104291", "MSG-550039", "TD-7702"], "stop_effective": "2026-11-01"},
+      {"scenario": "RUN_2026-10-02", "case": "E4", "type": "PREVENT", "probable_cause": "C4+C5", "recommended_option": "ZERO_DAYS_KEEP_FIXED", "label": "Zero disconnected days, keep fixed charges",
+       "must_cite": ["WO-104263", "WO-104270"]}
+    ]
+  },
+  "autopilot": {
+    "dataset": "dataset_A_with_errors",
+    "scenario": "RUN_2026-11-02",
+    "digest": ["E5", "E7"],
+    "finance_approved": [["E1", "PREVENT"], ["E2", "REMEDIATE"], ["E3", "REMEDIATE"]]
+  }
+}

@@ -1,5 +1,7 @@
 # Runtime state written by poc1/server.py (case state, sandbox overlays, audit log)
 poc1/state/
+# Pre-v2.0 state archived by the migration (never deleted by the app)
+poc1/state_archive/
 
 # Python
 __pycache__/

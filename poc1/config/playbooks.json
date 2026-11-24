@@ -1,62 +1,48 @@
 {
-  "_comment": "Each option maps to the ONLY step types the execution agent may use. 'routes_to' sends the case to another role first; 'terminal' closes or releases without a plan.",
+  "_comment": "workflow_rules.md v2.0 §6: cause -> options (recommended first) -> the ONLY step types the execution agent may run. Choosing a non-recommended option is an override (DRI, reason; + Finance if >= $1,000).",
   "playbooks": {
     "DISCONNECT_NOT_BILLED": {
-      "label": "Disconnect never reached billing",
+      "label": "Disconnect not reflected in billing",
       "causes": ["C1", "C2", "NOMSG", "OTHER"],
       "options": [
         {"option_id": "CORRECT_AND_REBILL", "label": "Correct and rebill", "recommended": true,
          "steps": ["REPROCESS_INTEGRATION_MESSAGE", "STOP_SA", "CORRECT_MDM_READS", "REGENERATE_DRAFT_BILL", "CANCEL_DRAFT_BILL", "CLOSE_TODO", "ADD_CRM_NOTE"]},
-        {"option_id": "HOLD_FIELD_VERIFICATION", "label": "Hold pending field verification", "steps": [], "routes_to": "FIELD_VERIFICATION"},
-        {"option_id": "RELEASE_AS_IS", "label": "Release as-is", "steps": [], "terminal": "RELEASE_AS_IS", "requires_reason": true}
-      ]
-    },
-    "STOP_TIMING": {
-      "label": "Bill ran before the stop was processed",
-      "causes": ["C6"],
-      "options": [
-        {"option_id": "PROCESS_STOP_THEN_FINAL", "label": "Process stop now, then final-bill", "recommended": true,
-         "steps": ["REPROCESS_INTEGRATION_MESSAGE", "STOP_SA", "CORRECT_MDM_READS", "REGENERATE_DRAFT_BILL"]},
-        {"option_id": "DEFER_TO_NEXT_RUN", "label": "Defer to next run", "steps": [], "terminal": "CLOSE", "requires_reason": true}
+        {"option_id": "RELEASE_AS_IS", "label": "Release as-is", "steps": [], "terminal": "RELEASE_AS_IS"}
       ]
     },
     "ID_MISMATCH": {
       "label": "ID mismatch",
       "causes": ["C3"],
-      "requires_master_data": true,
       "options": [
-        {"option_id": "CORRECT_AND_REBILL", "label": "Correct and rebill (after steward confirms)", "recommended": true, "requires_match_confirmed": true,
+        {"option_id": "CORRECT_AND_REBILL", "label": "Correct and rebill (after the Analyst confirms the match)", "recommended": true, "requires_match_confirmed": true,
          "steps": ["CORRECT_PREMISE_REFERENCE", "REPROCESS_INTEGRATION_MESSAGE", "STOP_SA", "CORRECT_MDM_READS", "REGENERATE_DRAFT_BILL", "CANCEL_DRAFT_BILL", "CLOSE_TODO", "ADD_CRM_NOTE"]},
-        {"option_id": "HOLD_FIELD_VERIFICATION", "label": "Hold pending field verification", "steps": [], "routes_to": "FIELD_VERIFICATION"},
-        {"option_id": "RELEASE_AS_IS", "label": "Release as-is", "steps": [], "terminal": "RELEASE_AS_IS", "requires_reason": true}
+        {"option_id": "RELEASE_AS_IS", "label": "Release as-is", "steps": [], "terminal": "RELEASE_AS_IS"}
+      ]
+    },
+    "STOP_TIMING": {
+      "label": "Timing race",
+      "causes": ["C6"],
+      "options": [
+        {"option_id": "PROCESS_STOP_THEN_FINAL", "label": "Process stop now, then final-bill", "recommended": true,
+         "steps": ["REPROCESS_INTEGRATION_MESSAGE", "STOP_SA", "CORRECT_MDM_READS", "REGENERATE_DRAFT_BILL"]},
+        {"option_id": "DEFER_TO_NEXT_RUN", "label": "Defer to next run", "steps": [], "terminal": "DEFER"}
       ]
     },
     "NONPAY_WINDOW": {
-      "label": "Non-pay window estimated",
+      "label": "Non-pay window",
       "causes": ["C4+C5"],
       "options": [
         {"option_id": "ZERO_DAYS_KEEP_FIXED", "label": "Zero disconnected days, keep fixed charges", "recommended": true,
          "steps": ["CORRECT_MDM_READS", "REGENERATE_DRAFT_BILL"]},
-        {"option_id": "RELEASE_AS_IS", "label": "Release as-is", "steps": [], "terminal": "RELEASE_AS_IS", "requires_reason": true}
-      ]
-    },
-    "REVENUE_PROTECTION": {
-      "label": "Revenue protection",
-      "causes": ["TAMPER"],
-      "options": [
-        {"option_id": "DISPATCH_FIELD_CHECK", "label": "Dispatch field check", "recommended": true, "routes_to": "FIELD_VERIFICATION",
-         "steps": ["CREATE_FIELD_WORK_ORDER", "ADD_CRM_NOTE"]},
-        {"option_id": "OPEN_RP_CASE", "label": "Open revenue-protection case", "steps": ["ADD_CRM_NOTE"]},
-        {"option_id": "NO_ACTION", "label": "No action", "steps": [], "terminal": "CLOSE", "requires_reason": true}
+        {"option_id": "RELEASE_AS_IS", "label": "Release as-is", "steps": [], "terminal": "RELEASE_AS_IS"}
       ]
     },
     "REMEDIATE": {
-      "label": "Credit on bills already issued",
+      "label": "Already billed",
       "causes": [],
       "options": [
-        {"option_id": "CREDIT_ISSUED_BILLS", "label": "Credit issued bills", "recommended": true,
-         "steps": ["CORRECT_PREMISE_REFERENCE", "CREATE_CREDIT_MEMO", "ADD_CRM_NOTE"]},
-        {"option_id": "NO_CREDIT", "label": "No credit", "steps": [], "terminal": "CLOSE", "requires_reason": true}
+        {"option_id": "CREDIT_AND_NOTIFY", "label": "Credit and notify", "recommended": true,
+         "steps": ["CORRECT_PREMISE_REFERENCE", "CREATE_CREDIT_MEMO", "ADD_CRM_NOTE", "DRAFT_CUSTOMER_LETTER", "DRAFT_REGULATOR_RESPONSE"]}
       ]
     }
   }

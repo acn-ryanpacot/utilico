@@ -1,10 +1,5 @@
 [
-  {"user_id": "u.billops", "name": "Maya Chen",     "role": "BILLING_OPS", "title": "Billing Operations Analyst"},
-  {"user_id": "u.dri",     "name": "Daniel Okoro",  "role": "DRI",         "title": "Escalation Lead"},
-  {"user_id": "u.field",   "name": "Sam Rivera",    "role": "FIELD_OPS",   "title": "Field Operations Coordinator"},
-  {"user_id": "u.mdata",   "name": "Elena Petrova", "role": "MASTER_DATA", "title": "Master Data Steward"},
-  {"user_id": "u.integ",   "name": "Tom Becker",    "role": "INTEGRATION", "title": "Integration Support Engineer"},
-  {"user_id": "u.finance", "name": "Aisha Rahman",  "role": "FINANCE",     "title": "Finance Controller"},
-  {"user_id": "u.reg",     "name": "Jonas Weber",   "role": "REGULATORY",  "title": "Regulatory Affairs Manager"},
-  {"user_id": "u.audit",   "name": "Linda Park",    "role": "AUDITOR",     "title": "Internal Auditor (read-only)"}
+  {"user_id": "u.billops", "name": "Maya Chen",    "persona": "BILLING_OPS", "title": "Billing Operations Analyst"},
+  {"user_id": "u.dri",     "name": "Daniel Okoro", "persona": "DRI",         "title": "DRI – Billing Exceptions Lead"},
+  {"user_id": "u.finance", "name": "Aisha Rahman", "persona": "FINANCE",     "title": "Finance Controller"}
 ]
