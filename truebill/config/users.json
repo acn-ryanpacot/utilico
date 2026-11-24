@@ -12,7 +12,6 @@
     "agent.reconciliation": {"name": "Reconciliation agent", "type": "AGENT"},
     "agent.recommendation": {"name": "Recommendation agent", "type": "AGENT"},
     "agent.communications": {"name": "Communications agent (dormant)", "type": "AGENT"},
-    "sys.prebill": {"name": "Pre-bill check / bill-run simulator", "type": "SYSTEM"},
     "sys.cli": {"name": "System (command line)", "type": "SYSTEM"},
     "sys.guard": {"name": "Offline guard", "type": "SYSTEM"}
   },
@@ -20,7 +19,6 @@
     "dashboard":  {"label": "Dashboard",                 "CSR": "V", "DRI": "V"},
     "mywork":     {"label": "My Work",                   "CSR": "A", "DRI": "A"},
     "lookup":     {"label": "Account lookup",            "CSR": "A", "DRI": "-"},
-    "timeline":   {"label": "Timeline & demo",           "CSR": "A", "DRI": "A"},
     "cases":      {"label": "Cases",                     "CSR": "V", "DRI": "A"},
     "case":       {"label": "Case detail",               "CSR": "A", "DRI": "A"},
     "backscan":   {"label": "Back-scan",                 "CSR": "A", "DRI": "V"},

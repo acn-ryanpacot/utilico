@@ -2,7 +2,7 @@
    enforces every permission. Live updates arrive over Server-Sent Events (fetch-based reader, so the user header
    is sent on the stream too). */
 const NAV = [
-  ['Overview', ['dashboard', 'mywork', 'lookup', 'timeline']],
+  ['Overview', ['dashboard', 'mywork', 'lookup']],
   ['Cases', ['cases']],
   ['POC 1 detector', ['backscan', 'daily']],
   ['Data & assurance', ['explorer', 'knowledge', 'audit', 'selftest']],
@@ -20,11 +20,11 @@ function hhmm(iso) { return iso ? iso.replace('T', ' ').slice(0, 16) : ''; }
 
 function trueBill() {
   return {
-    users: [], agent: null, knowledgeMode: null, me: null, perms: {}, labels: {}, datasets: [], scenarios: [], presets: [],
-    dsId: 'dataset_A_with_errors', scId: 'DISPUTE_REPLAY', route: { screen: 'dashboard', id: null }, nav: NAV,
+    users: [], agent: null, knowledgeMode: null, me: null, perms: {}, labels: {}, datasets: [],
+    dsId: 'dataset_A_with_errors', route: { screen: 'dashboard', id: null }, nav: NAV,
     st: null, data: {}, caseData: null, toastMsg: null, toastErr: false, labelsOn: false, feedFilter: 'all',
     auditF: {}, auditVerify: null, selftest: null, selftestRunning: false, explorer: { file: 'oms_work_orders.csv', q: '', page: 0 },
-    lookupAcc: '', lookupResult: null, lookupBusy: false,
+    lookupAcc: '', lookupAsOf: '2026-11-10', lookupResult: null, lookupBusy: false,
     knowledgeQ: 'Commercial disconnect not synced; full cycle billed', knowledgeColl: 'case_history', dailyAsOf: '2026-11-02',
     form: {}, sse: null, sseOn: false, refreshTimer: null, busy: false, theme: 'auto',
     LIFECYCLE, LANES, RULE_NAMES, PERSONA, money, pct, hhmm,
@@ -33,10 +33,10 @@ function trueBill() {
       try { const j = await (await fetch('/api/users')).json(); this.users = j.users; this.agent = j.agent; this.knowledgeMode = j.knowledge.mode; }
       catch (e) { this.toast('Cannot reach the local server: ' + e, true); }
       const saved = (() => { try { return JSON.parse(localStorage.getItem('tb.ctx') || '{}'); } catch (e) { return {}; } })();
-      if (saved.dsId) this.dsId = saved.dsId; if (saved.scId) this.scId = saved.scId;
+      if (saved.dsId) this.dsId = saved.dsId;
       window.addEventListener('hashchange', () => this.readHash());
     },
-    hdrs() { return { 'X-User-Id': this.me ? this.me.user_id : '', 'X-Dataset-Id': this.dsId, 'X-Scenario-Id': this.scId }; },
+    hdrs() { return { 'X-User-Id': this.me ? this.me.user_id : '', 'X-Dataset-Id': this.dsId }; },
     async api(path, opt = {}) {
       const r = await fetch(path, { method: opt.method || 'GET', headers: Object.assign(this.hdrs(), opt.body ? { 'Content-Type': 'application/json' } : {}),
         body: opt.body ? JSON.stringify(opt.body) : undefined, cache: 'no-store' });
@@ -58,14 +58,14 @@ function trueBill() {
       this.me = this.users.find(u => u.user_id === uid);
       await this.api('/api/session/sign_in', { method: 'POST', body: { user_id: uid, previous_user_id: prev } });
       const me = await this.api('/api/me'); this.perms = me.permissions; this.labels = me.screens;
-      const d = await this.api('/api/datasets'); this.datasets = d.datasets; this.scenarios = d.scenarios; this.presets = d.presets;
+      const d = await this.api('/api/datasets'); this.datasets = d.datasets;
       this.connectSSE();
       if (!location.hash || !this.can(location.hash.replace(/^#\/?/, '').split('/')[0])) location.hash = '#/dashboard'; else this.readHash();
       await this.refreshState();
     },
     signOut() { this.me = null; this.stopSSE(); },
     async switchCtx(kind) {
-      try { localStorage.setItem('tb.ctx', JSON.stringify({ dsId: this.dsId, scId: this.scId })); } catch (e) { }
+      try { localStorage.setItem('tb.ctx', JSON.stringify({ dsId: this.dsId })); } catch (e) { }
       await this.api('/api/context', { method: 'POST', body: { changed: kind } });
       this.connectSSE(); this.caseData = null;
       if (this.route.screen === 'case') location.hash = '#/cases'; else this.load();
@@ -95,7 +95,7 @@ function trueBill() {
         else if (s === 'explorer') this.data = await this.api('/api/explorer?' + new URLSearchParams(this.explorer));
         else if (s === 'knowledge') this.data = await this.api('/api/knowledge?' + new URLSearchParams({ q: this.knowledgeQ, collection: this.knowledgeColl }));
         else if (s === 'audit') this.data = await this.api('/api/audit?' + new URLSearchParams(Object.fromEntries(Object.entries(this.auditF).filter(([k, v]) => v))));
-        else if (s === 'timeline' || s === 'selftest') this.data = {};
+        else if (s === 'selftest') this.data = {};
         if (s !== 'case') this.data.denied = false;
       } catch (e) { if (e.status === 403) this.data = { denied: true, msg: e.message }; else this.toast(e.message, true); }
     },
@@ -133,26 +133,10 @@ function trueBill() {
       if (m.type === 'audit' && this.route.screen === 'dashboard' && this.data.feed && this.feedFilter === 'all') {
         this.data.feed.unshift(m.event); this.data.feed = this.data.feed.slice(0, 25);
       }
-      if (m.type === 'timeline' && this.st) { this.st.timeline.clock = m.clock; this.st.timeline.playing = m.playing; this.st.timeline.paused_reason = m.paused_reason; }
       if (m.type === 'activity' || (m.type === 'audit' && m.event.action === 'AGENT_TOOL_CALL')) return;
       this.scheduleRefresh();
     },
 
-    // ---- timeline / demo ------------------------------------------------------------------------------------
-    async tl(op, body) { try { const r = await this.api('/api/timeline/' + op, { method: 'POST', body: body || {} }); if (r.timeline && this.st) this.st.timeline = r.timeline; this.scheduleRefresh(); } catch (e) { this.toast(e.message, true); } },
-    async demo(op, body, msg) { try { const r = await this.api('/api/demo/' + op, { method: 'POST', body: body || {} }); if (msg) this.toast(msg); this.scheduleRefresh(); return r; } catch (e) { this.toast(e.message, true); } },
-    toggle(name, value) { this.tl('toggle', { name, value }); },
-    scrubX(at) {
-      const t = this.st.timeline; const a = Date.parse(t.start.replace(' ', 'T')), b = Date.parse(t.end.replace(' ', 'T'));
-      return b > a ? 6 + (Date.parse(at.replace(' ', 'T')) - a) / (b - a) * 988 : 500;
-    },
-    markerColor(e) { return e.status === 'DONE' ? 'var(--faint)' : e.status === 'BLOCKED' ? 'var(--high)' : e.type === 'BILL_READY' ? 'var(--accent)' : e.type === 'DISPUTE_OPENED' ? 'var(--high)' : e.type === 'DISCONNECT_FOLLOWUP_DUE' ? 'var(--agent)' : 'var(--med)'; },
-    markersSvg() {
-      if (!this.st) return '';
-      const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-      return this.st.timeline.events.map(e => `<rect x="${(this.scrubX(e.at) - 2).toFixed(1)}" y="5" width="4" height="20" rx="1" fill="${this.markerColor(e)}"><title>${esc(e.at + ' ' + e.type + ' ' + e.label + ' (' + e.status + ')')}</title></rect>`).join('');
-    },
-    pausedText() { const r = this.st && this.st.timeline.paused_reason; return r === 'humans' ? 'Paused for humans' : r === 'stale' ? 'Blocked: stale MDM feed' : r === 'end' ? 'End of scenario' : r === 'target' ? 'Preset reached' : ''; },
 
     // ---- case actions -----------------------------------------------------------------------------------------
     allowed(a) { return this.caseData && this.caseData.allowed_actions.includes(a); },
@@ -171,7 +155,7 @@ function trueBill() {
     async runLookup() {
       const acc = (this.lookupAcc || '').trim(); if (!acc) { this.toast('Enter an account number', true); return; }
       this.lookupBusy = true; this.lookupResult = null;
-      try { this.lookupResult = await this.api('/api/lookup', { method: 'POST', body: { account_id: acc } }); this.load(false); }
+      try { this.lookupResult = await this.api('/api/lookup', { method: 'POST', body: { account_id: acc, as_of: this.lookupAsOf } }); this.load(false); }
       catch (e) { this.lookupResult = { status: 'ERROR', message: e.message }; }
       this.lookupBusy = false;
     },

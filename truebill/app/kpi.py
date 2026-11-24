@@ -1,9 +1,8 @@
 """KPIs and the Day-30 gate, calculated from the audit log, the evidence store and case state.
 
-The process ends at the DRI's decision, so money is counted at approval: $ prevented = approved PREVENT
-reductions, $ remediated = approved REMEDIATE credits, $ exposure addressed = approved ADVANCE projections.
-Citation coverage = agent statements (rule explanations, recommendation rationales) citing existing facts.
-CSR lookups that found nothing (NO_ISSUE) are not cases and are left out.
+Money is counted when the DRI approves: $ remediated = approved REMEDIATE credits, $ exposure addressed = approved
+ADVANCE projections. Detection rate = expected back-scan cases detected (once findings were sent); a false positive
+is a case on an account outside the in-scope sample cases. CSR lookups that found nothing (NO_ISSUE) are not cases.
 """
 import statistics
 from datetime import datetime
@@ -11,6 +10,7 @@ from datetime import datetime
 from .util import D, f2
 
 GATE = {"detection_min": 0.95, "false_positive_max": 0.05, "citations_min": 1.0, "packet_max_seconds": 300}
+IN_SCOPE = {"E1", "E2", "E3", "E4", "E5", "E7"}
 
 
 def _secs(a, b):
@@ -19,15 +19,10 @@ def _secs(a, b):
     return (datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds()
 
 
-def expected_codes(cfg, ds_id, sc_id, followup_on):
-    ex = cfg.expected()["scenarios"].get(ds_id, {}).get(sc_id, {})
-    mode = ("followup_on" if followup_on else "followup_off") if sc_id == "PREVENTION_REPLAY" else "default"
-    e = ex.get(mode, {})
+def expected_backscan(cfg, ds_id):
+    e = cfg.expected()["backscan"].get(ds_id, {})
     if "only" in e:
         return list(e["only"])
-    if "cases_from" in e:
-        a, b, c = e["cases_from"]
-        e = cfg.expected()["scenarios"][a][b][c]
     return sorted({c["case"] for c in e.get("cases", [])})
 
 
@@ -49,11 +44,9 @@ def kpis(s):
     codes = s.ds.case_codes
     packet = [x for x in (_secs(c["timings"].get("new_real"), c["timings"].get("recommended_real")) for c in cases) if x is not None]
     conflict = [x for x in (_secs(c["timings"].get("event_real"), c["timings"].get("reconciled_real")) for c in cases) if x is not None]
-    exp = expected_codes(s.cfg, s.ds.id, s.sc_id, s.state["toggles"]["followup"])
-    pipeline_cases = [c for c in cases if not c.get("lookup")]
-    exp_active = [] if (s.sc_id == "BACKSCAN_2026-11-10" and not pipeline_cases) else exp
-    detected = sorted({codes.get(c["account_id"]) for c in cases if codes.get(c["account_id"]) in exp_active})
-    fp = [c for c in cases if codes.get(c["account_id"]) not in exp]
+    exp = expected_backscan(s.cfg, s.ds.id) if s.state.get("backscan_sent") else []
+    detected = sorted({codes.get(c["account_id"]) for c in cases if codes.get(c["account_id"]) in exp})
+    fp = [c for c in cases if codes.get(c["account_id"]) not in IN_SCOPE]
     total, cited = citation_stats(s, cases)
     green = [c for c in cases if (c.get("triage") or {}).get("would_auto_approve") and c["triage"].get("agreed") is not None]
     slas = [s.sla_view(c)["worst"] for c in cases if c["state"] not in ("APPROVED", "REJECTED")]
@@ -61,24 +54,20 @@ def kpis(s):
 
     def total_of(kind):
         return f2(sum((D(a["amount"]) for a in appr if a["kind"] == kind), D(0)))
-    exposure_open = sum((D(c["amount"]) for c in cases if c["type"] == "ADVANCE" and c["state"] not in ("APPROVED", "REJECTED")), D(0))
-    bills = list(s.state["bills"].values())
+    open_amt = sum((D(c["amount"]) for c in cases if c["state"] not in ("APPROVED", "REJECTED")), D(0))
     out = {
         "packet_seconds": {"median": round(statistics.median(packet), 3) if packet else None, "max": round(max(packet), 3) if packet else None, "n": len(packet)},
         "conflict_seconds": {"median": round(statistics.median(conflict), 3) if conflict else None, "max": round(max(conflict), 3) if conflict else None},
-        "detection_rate": (len(detected) / len(exp_active)) if exp_active else None, "expected": exp_active, "detected": detected,
+        "detection_rate": (len(detected) / len(exp)) if exp else None, "expected": exp, "detected": detected,
         "false_positive_rate": (len(fp) / len(cases)) if cases else 0.0, "false_positives": [c["case_id"] for c in fp],
         "citation_coverage": (cited / total) if total else None, "agent_statements": total,
         "triage_agreement": (sum(1 for c in green if c["triage"]["agreed"]) / len(green)) if green else None, "green_cases": len(green),
         "sla_at_risk": slas.count("AT_RISK"), "sla_breached": slas.count("BREACHED"),
-        "prevented": total_of("prevented"), "remediated": total_of("remediated"), "exposure_addressed": total_of("exposure_addressed"),
-        "projected_exposure_open": f2(exposure_open),
+        "remediated": total_of("remediated"), "exposure_addressed": total_of("exposure_addressed"), "open_amount": f2(open_amt),
         "approved": sum(1 for c in cases if c["state"] == "APPROVED"), "rejected": sum(1 for c in cases if c["state"] == "REJECTED"),
-        "bills": {"held": sum(1 for b in bills if b.get("outcome") == "HELD"), "held_on_existing_case": sum(1 for b in bills if b.get("attached")),
-                  "passed": sum(1 for b in bills if b.get("outcome") == "PASSED")},
         "lookups": sum(1 for c in s.state["cases"].values() if c.get("lookup")),
         "lookups_no_issue": sum(1 for c in s.state["cases"].values() if c["state"] == "NO_ISSUE"),
-        "cases": len(cases),
+        "cases": len(cases), "backscan_sent": len(s.state.get("backscan_sent", [])),
         "by_state": _count(c["state"] for c in cases), "by_priority": _count(c["priority"] for c in cases),
         "by_triage": _count((c.get("triage") or {}).get("colour", "-") for c in cases),
         "by_type": _count(c["type"] for c in cases),

@@ -7,4 +7,4 @@ def test_selftest_all_pass(registry, kb):
     r = SelfTest(registry, kb, hashes).run()
     failed = [(g["name"], x["check"], x["expected"], x["actual"]) for g in r["groups"] for x in g["rows"] if not x["pass"]]
     assert r["pass"], failed[:10]
-    assert r["checks"] > 400
+    assert r["checks"] > 150

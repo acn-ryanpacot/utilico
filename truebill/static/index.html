@@ -36,7 +36,6 @@
   <div class="top-row">
     <div class="brand"><div class="logo">TB</div><div><h1>AI-TrueBILL</h1><p>OMS × CC&amp;B × MDM × CRM × GL</p></div></div>
     <select class="input" x-model="dsId" @change="switchCtx('dataset')" aria-label="Dataset"><template x-for="d in datasets" :key="d.id"><option :value="d.id" x-text="d.name" :selected="d.id===dsId"></option></template></select>
-    <select class="input" x-model="scId" @change="switchCtx('scenario')" aria-label="Scenario"><template x-for="s in scenarios" :key="s.id"><option :value="s.id" x-text="s.id" :selected="s.id===scId"></option></template></select>
     <span class="badge agent" x-text="agent ? agent.label : 'Agent: mock (scripted)'"></span>
     <span class="badge" :class="st && st.knowledge.mode==='chromadb' ? 'ok' : 'warn'" x-text="st && st.knowledge.mode==='chromadb' ? 'Knowledge: ChromaDB (local MiniLM)' : 'Knowledge store: fallback mode'"></span>
     <span class="badge" :class="sseOn ? 'ok' : 'warn'" x-text="sseOn ? 'live' : 'reconnecting…'"></span>
@@ -46,25 +45,6 @@
     <span class="avatar" x-text="initials(me.name)"></span><div style="line-height:1.1"><b x-text="me.name"></b><div class="muted" style="font-size:11.5px" x-text="me.title"></div></div>
     <button class="btn sm" @click="signOut()">Switch user</button>
   </div>
-  <div class="tl-row" x-show="st">
-    <button class="btn sm" @click="tl('play')" x-show="st && !st.timeline.playing" :disabled="lvl('timeline')!=='A'">▶ Play</button>
-    <button class="btn sm" @click="tl('pause')" x-show="st && st.timeline.playing">❚❚ Pause</button>
-    <button class="btn sm" @click="tl('step')" :disabled="lvl('timeline')!=='A'">⏭ Step to next event</button>
-    <select class="input" style="padding:3px 6px" @change="tl('speed', {speed: $event.target.value})" aria-label="Speed">
-      <option value="0.25">¼ day/s</option><option value="1" selected>1 day/s</option><option value="4">4 days/s</option><option value="16">16 days/s</option></select>
-    <span class="clock" x-text="st ? st.timeline.clock : ''"></span>
-    <span class="badge warn" x-show="pausedText()" x-text="pausedText()"></span>
-    <svg class="scrubber" viewBox="0 0 1000 30" preserveAspectRatio="none" x-show="st && st.timeline.start !== st.timeline.end">
-      <rect x="0" y="13" width="1000" height="4" rx="2" fill="var(--border)"></rect>
-      <rect x="0" y="13" :width="st ? scrubX(st.timeline.clock) : 0" height="4" rx="2" fill="var(--accent)"></rect>
-      <g x-html="markersSvg()"></g>
-    </svg>
-    <label class="switch"><input type="checkbox" :checked="st && st.timeline.toggles.followup" @change="toggle('followup', $event.target.checked)"> Disconnect follow-up (S3 preview)</label>
-    <label class="switch"><input type="checkbox" :checked="st && st.timeline.pause_for_humans" @change="toggle('pause_for_humans', $event.target.checked)"> Pause for humans</label>
-    <label class="switch"><input type="checkbox" :checked="st && st.timeline.toggles.stale_mdm" @change="toggle('stale_mdm', $event.target.checked)"> Stale MDM feed (6 h)</label>
-    <label class="switch"><input type="checkbox" :checked="st && st.timeline.toggles.autopilot" @change="demo('autopilot', {value: $event.target.checked})"> Autopilot</label>
-  </div>
-  <template x-if="st && st.timeline.banner"><div class="banner" :class="st.timeline.banner.kind" x-text="st.timeline.banner.text"></div></template>
   <template x-if="st && st.knowledge.mode !== 'chromadb'"><div class="banner err">Knowledge store: fallback mode (keyword similarity) - <span x-text="st.knowledge.error"></span></div></template>
 </header>
 
@@ -86,15 +66,15 @@
     <!-- ===== dashboard ===== -->
     <template x-if="route.screen==='dashboard' && data.kpis">
       <div>
-        <div class="page-head"><div><h2>Dashboard</h2><p x-text="scId + ' · ' + (datasets.find(d=>d.id===dsId)||{}).name + ' · scenario clock ' + (st ? st.timeline.clock : '')"></p></div></div>
+        <div class="page-head"><div><h2>Dashboard</h2><p x-text="(datasets.find(d=>d.id===dsId)||{}).name + ' · back-scan as of ' + (st ? st.extract_end : '') + ' · lookups as of the date Maya picks'"></p></div></div>
         <div class="card"><div class="card-head"><h3>Day-30 gate</h3><span class="badge" :class="data.kpis.gate.pass ? 'ok' : 'bad'" x-text="data.kpis.gate.pass ? 'PASS' : 'not yet'"></span></div>
           <div class="card-body gate"><template x-for="r in data.kpis.gate.rows" :key="r.name"><div :class="r.pass ? 'pass' : 'fail'"><span x-text="r.name"></span><b x-text="r.display"></b><span x-text="'target ' + r.target"></span></div></template></div></div>
         <section class="kpis">
-          <div class="kpi emph"><div class="l">$ prevented (approved)</div><div class="v" x-text="money(data.kpis.prevented)"></div><div class="s">PREVENT reductions the DRI approved</div></div>
+          <div class="kpi"><div class="l">Open cases</div><div class="v" x-text="data.kpis.cases - data.kpis.approved - data.kpis.rejected"></div><div class="s" x-text="money(data.kpis.open_amount) + ' at stake, awaiting triage or the DRI'"></div></div>
           <div class="kpi emph"><div class="l">$ remediated (approved)</div><div class="v" x-text="money(data.kpis.remediated)"></div><div class="s">credits the DRI approved</div></div>
-          <div class="kpi emph"><div class="l">$ exposure addressed</div><div class="v" x-text="money(data.kpis.exposure_addressed)"></div><div class="s" x-text="'approved ADVANCE · ' + money(data.kpis.projected_exposure_open) + ' still open'"></div></div>
+          <div class="kpi emph"><div class="l">$ exposure addressed</div><div class="v" x-text="money(data.kpis.exposure_addressed)"></div><div class="s" x-text="'approved ADVANCE (account still active, not yet billed)'"></div></div>
           <div class="kpi"><div class="l">Decisions</div><div class="v" x-text="data.kpis.approved + ' / ' + data.kpis.rejected"></div><div class="s">approved / rejected (final, sealed)</div></div>
-          <div class="kpi"><div class="l">Bills held / passed</div><div class="v" x-text="data.kpis.bills.held + ' / ' + data.kpis.bills.passed"></div><div class="s" x-text="data.kpis.bills.held_on_existing_case + ' held on an existing case'"></div></div>
+          <div class="kpi"><div class="l">Intake</div><div class="v" x-text="data.kpis.backscan_sent + ' / ' + data.kpis.lookups"></div><div class="s" x-text="'back-scan sent / lookups (' + data.kpis.lookups_no_issue + ' no issue)'"></div></div>
           <div class="kpi" :class="data.kpis.sla_breached ? 'warn' : ''"><div class="l">SLA at risk / breached</div><div class="v" x-text="data.kpis.sla_at_risk + ' / ' + data.kpis.sla_breached"></div><div class="s">75% / 100% of target (flags only)</div></div>
           <div class="kpi"><div class="l">Packet assembly</div><div class="v" x-text="data.kpis.packet_seconds.median === null ? '—' : data.kpis.packet_seconds.median + ' s'"></div><div class="s" x-text="'median · max ' + (data.kpis.packet_seconds.max ?? '—') + ' s'"></div></div>
           <div class="kpi"><div class="l">Conflict detection</div><div class="v" x-text="data.kpis.conflict_seconds.median === null ? '—' : data.kpis.conflict_seconds.median + ' s'"></div><div class="s">event → reconciliation</div></div>
@@ -103,7 +83,7 @@
           <div class="kpi"><div class="l">Triage agreement</div><div class="v" x-text="pct(data.kpis.triage_agreement)"></div><div class="s" x-text="data.kpis.green_cases + ' Green case(s) decided'"></div></div>
         </section>
         <div class="grid3">
-          <div class="card"><div class="card-head"><h3>Cases by state</h3><span class="muted" x-text="data.kpis.cases + ' case(s)'"></span></div><div class="card-body"><template x-for="b in bars(data.kpis.by_state)" :key="b.k"><div class="bar"><span x-text="b.k"></span><div class="track"><div class="fill" :style="'width:'+b.w"></div></div><b class="num" x-text="b.v"></b></div></template><div class="empty" x-show="!data.kpis.cases">No cases yet - press Play.</div></div></div>
+          <div class="card"><div class="card-head"><h3>Cases by state</h3><span class="muted" x-text="data.kpis.cases + ' case(s)'"></span></div><div class="card-body"><template x-for="b in bars(data.kpis.by_state)" :key="b.k"><div class="bar"><span x-text="b.k"></span><div class="track"><div class="fill" :style="'width:'+b.w"></div></div><b class="num" x-text="b.v"></b></div></template><div class="empty" x-show="!data.kpis.cases">No cases yet.</div></div></div>
           <div class="card"><div class="card-head"><h3>Priority · triage · type</h3></div><div class="card-body">
             <template x-for="b in bars(data.kpis.by_priority)" :key="'p'+b.k"><div class="bar"><span><span class="prio" :class="b.k" x-text="b.k"></span></span><div class="track"><div class="fill" :style="'width:'+b.w"></div></div><b x-text="b.v"></b></div></template>
             <template x-for="b in bars(data.kpis.by_triage)" :key="'t'+b.k"><div class="bar"><span><span class="tri" :class="b.k"></span><span x-text="b.k"></span></span><div class="track"><div class="fill" :style="'width:'+b.w"></div></div><b x-text="b.v"></b></div></template>
@@ -130,14 +110,15 @@
             <td><span class="tri" :class="i.triage" x-show="i.triage"></span><span x-text="i.triage||''"></span></td><td><span class="type" :class="i.type" x-text="i.type"></span></td>
             <td class="mono" x-text="i.case_id || '—'"></td><td><span x-text="i.customer_name||''"></span><span class="code" x-show="code(i.account_id)" x-text="code(i.account_id)"></span></td>
             <td class="r num" x-text="i.amount!==undefined ? money(i.amount) : ''"></td><td><b x-text="i.next_action"></b><span class="badge warn" x-show="i.returned">returned</span></td></tr></template></tbody></table>
-          <div class="empty" x-show="!data.items.length">Nothing is waiting on you in this scenario.</div></div></div></div>
+          <div class="empty" x-show="!data.items.length">Nothing is waiting on you.</div></div></div></div>
     </template>
 
     <!-- ===== account lookup (CSR) ===== -->
     <template x-if="route.screen==='lookup' && data.items">
-      <div><div class="page-head"><div><h2>Account lookup</h2><p x-text="'Enter an account number - the agents retrieve all five systems and reconcile them as of the scenario clock (' + data.clock + ').'"></p></div></div>
+      <div><div class="page-head"><div><h2>Account lookup</h2><p>Enter an account number and an as-of date - the agents retrieve all five systems and reconcile them as the data stood at 23:59 that day.</p></div></div>
         <div class="card"><div class="card-body">
           <div class="lookup-box"><input class="input mono" placeholder="Account number, e.g. 8800010101" x-model="lookupAcc" @keydown.enter="runLookup()" aria-label="Account number">
+            <label class="muted" for="lkAsOf">As of</label><input id="lkAsOf" class="input" type="date" min="2026-08-01" max="2026-11-10" x-model="lookupAsOf" style="font-size:15px;padding:7px 9px">
             <button class="btn primary" :disabled="lookupBusy" @click="runLookup()" x-text="lookupBusy ? 'Starting…' : 'Check account'"></button></div>
           <template x-if="lookupResult">
             <div class="result" :class="{ok: lookupResult.status==='NO_DISCONNECT' || lookupState(lookupResult.case_id)==='NO_ISSUE', case: ['TRIAGE','AWAITING_DRI','APPROVED','REJECTED'].includes(lookupState(lookupResult.case_id)) || lookupResult.status==='EXISTING'}">
@@ -151,37 +132,14 @@
             </div></template>
           <p class="faint" style="margin:10px 0 0">Findings open a case (LK-…) that goes to your triage and then to the DRI for the final decision. If no rule fires, the agents' evidence is kept for reference but no case is opened. Usage after a disconnect that was not billed is out of scope.</p>
         </div></div>
-        <div class="card"><div class="card-head"><h3>Your lookups</h3><span class="muted" x-text="data.items.length + ' in this scenario'"></span></div>
-          <div class="table-wrap"><table class="grid"><thead><tr><th>Lookup</th><th>Account</th><th>Customer</th><th>Result</th><th>Rules fired</th><th class="r">Amount</th><th>Facts</th><th>At</th></tr></thead><tbody>
+        <div class="card"><div class="card-head"><h3>Your lookups</h3><span class="muted" x-text="data.items.length + ' lookup(s)'"></span></div>
+          <div class="table-wrap"><table class="grid"><thead><tr><th>Lookup</th><th>Account</th><th>Customer</th><th>Result</th><th>Rules fired</th><th class="r">Amount</th><th>Facts</th><th>As of</th></tr></thead><tbody>
             <template x-for="i in data.items" :key="i.case_id"><tr class="click" @click="go('case', i.case_id)">
               <td class="mono" x-text="i.case_id"></td><td class="mono" x-text="i.account_id"></td><td><span x-text="i.customer_name"></span><span class="code" x-show="code(i.account_id)" x-text="code(i.account_id)"></span></td>
               <td><span class="state" :class="stateClass(i.state)" x-text="i.state==='NO_ISSUE' ? 'no issue' : i.state"></span></td>
               <td><template x-for="r in (i.rules_fired||[])" :key="r"><span class="rule on" x-text="r"></span></template><span class="faint" x-show="i.reconciled && !(i.rules_fired||[]).length">none</span></td>
               <td class="r num" x-text="i.state==='NO_ISSUE' ? '—' : money(i.amount)"></td><td x-text="i.facts"></td><td class="num" x-text="i.opened_at"></td></tr></template></tbody></table>
             <div class="empty" x-show="!data.items.length">No lookups yet.</div></div></div></div>
-    </template>
-
-    <!-- ===== timeline & demo ===== -->
-    <template x-if="route.screen==='timeline'">
-      <div><div class="page-head"><div><h2>Timeline &amp; demo</h2><p x-text="(scenarios.find(s=>s.id===scId)||{}).label"></p></div></div>
-        <div class="grid2">
-          <div class="card"><div class="card-head"><h3>Presets</h3></div><div class="card-body">
-            <template x-for="p in presets" :key="p.id"><div class="row" style="margin:0 0 6px"><button class="btn" :disabled="p.scenario!==scId" @click="tl('preset', {preset: p.id})" x-text="p.label"></button><span class="faint" x-show="p.scenario!==scId" x-text="'switch to ' + p.scenario"></span></div></template>
-            <p class="faint">With "Pause for humans" on, a jump stops whenever a case waits for a person; turn on Autopilot (or act yourself) to continue.</p></div></div>
-          <div class="card"><div class="card-head"><h3>Demo tools</h3><span class="muted">every action is audited</span></div><div class="card-body">
-            <div class="row"><button class="btn" @click="confirm('Reset all cases and lookups for ' + scId + '? The audit log is kept.') && demo('reset', {}, 'Scenario reset')">Reset demo state</button>
-              <button class="btn" @click="confirm('Reset every dataset and scenario? The audit log is kept.') && demo('reset', {scope:'all'}, 'All scenarios reset')">Reset all</button></div>
-            <div class="row"><label class="switch"><input type="checkbox" :checked="st && st.timeline.toggles.stale_mdm" @change="toggle('stale_mdm', $event.target.checked)"> Simulate stale MDM feed (6 h)</label>
-              <span class="faint" x-text="st ? 'MDM lag ' + st.freshness.lags.MDM + ' min (max ' + st.freshness.max_lag_minutes + ')' : ''"></span></div>
-            <div class="row"><button class="btn primary" @click="demo('autopilot', {value:true, speed: 4}, 'Autopilot on - each persona\'s next recommended action, logged with autopilot=true')">Autopilot (play to end)</button>
-              <button class="btn" @click="demo('autopilot', {value:false}, 'Autopilot off')">Stop autopilot</button></div>
-          </div></div>
-        </div>
-        <div class="card"><div class="card-head"><h3>Events</h3><span class="muted" x-text="st ? st.timeline.events.length + ' event(s)' : ''"></span></div>
-          <div class="table-wrap"><table class="grid"><thead><tr><th>At</th><th>Event</th><th>Ref</th><th>Status</th><th>Case</th></tr></thead><tbody>
-            <template x-for="e in (st ? st.timeline.events : [])" :key="e.event_id"><tr><td class="num" x-text="e.at"></td><td><span class="mono" x-text="e.type"></span><span class="faint" x-show="e.scheduled"> (scheduled)</span></td><td x-text="e.label"></td>
-              <td><span class="badge" :class="e.status==='DONE' ? 'ok' : e.status==='BLOCKED' ? 'bad' : ''" x-text="e.status"></span></td><td class="mono"><a x-show="e.case_id" :href="'#/case/' + (e.case_id||'').split(',')[0]" x-text="e.case_id"></a></td></tr></template></tbody></table></div></div>
-      </div>
     </template>
 
     <!-- ===== cases ===== -->
@@ -194,7 +152,7 @@
             <td><span class="sla" :class="c.sla_worst" x-text="c.sla_worst"></span></td><td><span class="tri" :class="c.triage"></span><span x-text="c.triage||'—'"></span></td>
             <td><span x-text="c.customer_name"></span><span class="code" x-show="code(c.account_id)" x-text="code(c.account_id)"></span></td><td class="r num" x-text="money(c.amount)"></td>
             <td><template x-for="r in (c.rules_fired||[])" :key="r"><span class="rule on" x-text="r"></span></template></td><td x-text="c.label || (c.agent_error ? 'guardrail: ' + c.agent_error : '…')"></td><td class="num" x-text="c.opened_at"></td></tr></template></tbody></table>
-          <div class="empty" x-show="!data.cases.length">No cases yet. Press Play (or a preset) - the Orchestrator opens cases as events arrive.</div></div></div></div>
+          <div class="empty" x-show="!data.cases.length">No cases yet. Maya sends back-scan findings or looks up an account to open cases.</div></div></div></div>
     </template>
 
     <!-- ===== case detail ===== -->
@@ -223,7 +181,7 @@
             <div class="compare"><div class="box"><div class="muted">OMS premise as recorded</div><b x-text="caseData.recorded_premise"></b><div class="faint">not in ref_id_crosswalk</div></div><div>→</div>
               <div class="box"><div class="muted">Suggested crosswalk match</div><b x-text="caseData.suggested_premise"></b><div class="faint" x-text="'meter ' + caseData.meter_id + ' · ' + caseData.customer_name"></div></div></div>
             <p class="muted" x-show="readsFact()" x-text="readsFact() ? ('Reads on ' + readsFact().fields.meter_id + ' after the disconnect: ' + readsFact().fields.days + ' day(s), ' + readsFact().fields.estimated_days + ' ESTIMATED' + (readsFact().fields.first_estimated_date ? ' from ' + readsFact().fields.first_estimated_date : '') + ' [' + readsFact().fact_id + ']') : ''"></p>
-            <p class="muted" x-show="!readsFact()">No reads after the disconnect are visible yet at this scenario time.</p>
+            <p class="muted" x-show="!readsFact()">No reads after the disconnect are visible yet as of this case's date.</p>
             <textarea x-model="form.note" placeholder="Evidence note (required to reject)"></textarea>
             <div class="row"><button class="btn primary" @click="act('CONFIRM_MATCH')">Confirm match (re-runs the agents once)</button><button class="btn danger" @click="act('REJECT_MATCH', {reason: form.note})">Reject match</button></div></div>
           <div class="sec" x-show="allowed('CONFIRM_TRIAGE')"><h4>Triage - confirm the evidence and customer contact</h4><textarea x-model="form.note" placeholder="Note (optional)"></textarea><div class="row"><button class="btn primary" @click="act('CONFIRM_TRIAGE')">Confirm triage</button></div></div>
@@ -279,7 +237,6 @@
     <template x-if="route.screen==='backscan' && data.findings">
       <div><div class="page-head"><div><h2>Back-scan</h2><p x-text="'POC 1 detector over issued bills, as of ' + data.as_of + ' · ' + data.scanned + ' disconnects scanned, ' + data.matched + ' matched'"></p></div>
           <button class="btn primary" x-show="data.can_send && lvl('backscan')==='A'" @click="backscanSend(null)">Send all eligible to workflow</button></div>
-        <p class="banner" x-show="!data.can_send">Switch the scenario to BACKSCAN_2026-11-10 to send findings into the workflow as REMEDIATE cases.</p>
         <section class="kpis"><div class="kpi emph"><div class="l">Total credit owed</div><div class="v" x-text="money(data.total_credit)"></div><div class="s" x-text="data.findings.filter(f=>f.credit>0).length + ' finding(s)'"></div></div>
           <div class="kpi"><div class="l">Unmatched (potential if linked)</div><div class="v" x-text="money(data.unmatched.reduce((s,u)=>s+u.exposure,0))"></div><div class="s" x-text="data.unmatched.length + ' disconnect(s)'"></div></div></section>
         <div class="card"><div class="card-head"><h3>Findings</h3></div><div class="table-wrap"><table class="grid"><tr><th>Account</th><th>Customer</th><th>Severity</th><th>Work order</th><th class="r">Phantom kWh</th><th class="r">Credit</th><th>Bills</th><th>Workflow</th></tr>
@@ -330,15 +287,14 @@
         <div class="row" style="margin:0"><button class="btn" @click="auditExport()">Export CSV</button><button class="btn primary" @click="auditVerifyRun()">Verify integrity</button></div></div>
         <div class="banner" :class="auditVerify && !auditVerify.ok ? 'err' : ''" x-show="auditVerify" x-text="auditVerify ? (auditVerify.ok ? ('✓ Chain intact (' + auditVerify.chain.events + ' events) and ' + auditVerify.seals.length + ' case seal(s) verified') : ('✗ ' + (auditVerify.chain.first_broken ? 'chain broken at line ' + auditVerify.chain.first_broken.line + ': ' + auditVerify.chain.first_broken.reason : 'seal broken: ' + auditVerify.first_broken_seal.case_id))) : ''"></div>
         <div class="card"><div class="card-body"><div class="row" style="margin:0">
-          <select class="input" x-model="auditF.user"><option value="">All actors</option><template x-for="u in users" :key="u.user_id"><option :value="u.user_id" x-text="u.name"></option></template><option value="agent.orchestrator">Orchestrator</option><option value="agent.retrieval">Data Retrieval</option><option value="agent.reconciliation">Reconciliation</option><option value="agent.recommendation">Recommendation</option><option value="sys.prebill">Pre-bill</option></select>
+          <select class="input" x-model="auditF.user"><option value="">All actors</option><template x-for="u in users" :key="u.user_id"><option :value="u.user_id" x-text="u.name"></option></template><option value="agent.orchestrator">Orchestrator</option><option value="agent.retrieval">Data Retrieval</option><option value="agent.reconciliation">Reconciliation</option><option value="agent.recommendation">Recommendation</option></select>
           <select class="input" x-model="auditF.persona"><option value="">All personas</option><option value="CSR">CSR</option><option value="DRI">DRI</option><option value="AGENT">Agents</option><option value="SYSTEM">System</option></select>
           <select class="input" x-model="auditF.action"><option value="">All actions</option><template x-for="a in data.actions" :key="a"><option :value="a" x-text="a"></option></template></select>
           <input class="input" placeholder="Case, e.g. TB-1001" x-model="auditF.case">
-          <select class="input" x-model="auditF.scenario"><option value="">All scenarios</option><template x-for="s in scenarios" :key="s.id"><option :value="s.id" x-text="s.id"></option></template></select>
           <input class="input" type="date" x-model="auditF.from"><input class="input" type="date" x-model="auditF.to"><input class="input" type="search" placeholder="Free text" x-model="auditF.q">
           <button class="btn primary" @click="load(false)">Apply</button><button class="btn" @click="auditF={}; load(false)">Clear</button><span class="muted" x-text="data.total + ' event(s)'"></span></div></div>
-          <div class="table-wrap"><table class="grid"><tr><th>When</th><th>Scenario time</th><th>Who</th><th>What</th><th>Object</th><th>Detail</th></tr>
-            <template x-for="e in data.events" :key="e.event_id"><tr :class="{click: e.case_id}" @click="e.case_id && e.scenario_id===scId && go('case', e.case_id)"><td class="num" style="white-space:nowrap" x-text="hhmm(e.timestamp_local)"></td><td class="num" x-text="(e.scenario_id||'') + ' ' + (e.scenario_time||'')"></td><td x-text="who(e) + (e.autopilot ? ' (autopilot)' : '')"></td><td class="mono" x-text="e.action"></td><td class="mono" x-text="e.case_id || e.object_id"></td><td x-text="detail(e)"></td></tr></template></table></div></div></div>
+          <div class="table-wrap"><table class="grid"><tr><th>When</th><th>As of</th><th>Who</th><th>What</th><th>Object</th><th>Detail</th></tr>
+            <template x-for="e in data.events" :key="e.event_id"><tr :class="{click: e.case_id}" @click="e.case_id && go('case', e.case_id)"><td class="num" style="white-space:nowrap" x-text="hhmm(e.timestamp_local)"></td><td class="num" x-text="e.scenario_time||''"></td><td x-text="who(e) + (e.autopilot ? ' (autopilot)' : '')"></td><td class="mono" x-text="e.action"></td><td class="mono" x-text="e.case_id || e.object_id"></td><td x-text="detail(e)"></td></tr></template></table></div></div></div>
     </template>
 
     <!-- ===== self-test ===== -->

@@ -41,9 +41,10 @@ def test_forbidden_calls_return_403_and_are_logged(client):
 
 def test_csr_lookup_endpoint(client):
     c, app = client
-    r = c.post("/api/lookup", json={"account_id": "8800010455"}, headers=H("u.csr"))
-    assert r.status_code == 200 and r.json()["status"] == "STARTED"
+    r = c.post("/api/lookup", json={"account_id": "8800010455", "as_of": "2026-11-10"}, headers=H("u.csr"))
+    assert r.status_code == 200 and r.json()["status"] == "STARTED" and r.json()["as_of"] == "2026-11-10 23:59"
     assert c.post("/api/lookup", json={"account_id": "nope"}, headers=H("u.csr")).status_code == 400
+    assert c.post("/api/lookup", json={"account_id": "8800010101", "as_of": "2027-01-01"}, headers=H("u.csr")).status_code == 400
     items = c.get("/api/lookup", headers=H("u.csr")).json()["items"]
     assert items and items[0]["account_id"] == "8800010455"
 
@@ -57,7 +58,9 @@ def test_unknown_user_and_host(client):
 def test_dashboard_and_state(client):
     c, app = client
     r = c.get("/api/state", headers=H("u.dri")).json()
-    assert r["timeline"]["clock"] == "2026-11-02 00:00" and r["knowledge"]["mode"] in ("chromadb", "fallback")
+    assert r["extract_end"] == "2026-11-10 23:59" and "timeline" not in r and r["knowledge"]["mode"] in ("chromadb", "fallback")
+    assert c.post("/api/timeline/play", json={}, headers=H("u.dri")).status_code == 404
+    assert c.post("/api/demo/reset", json={}, headers=H("u.dri")).status_code == 404
     d = c.get("/api/dashboard", headers=H("u.dri")).json()
     assert "gate" in d["kpis"] and "exposure_addressed" in d["kpis"]
 

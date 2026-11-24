@@ -1,8 +1,8 @@
 # AI-TrueBILL — billed-after-disconnection agent workflow (Utilico Energy)
 
-Agents (Orchestrator, Data Retrieval in five parallel lanes, Reconciliation, Recommendation) and one accountable human decision point (the DRI) — catching **customers billed, or about to be billed, for days after their service was physically disconnected**. The process ends at the DRI's decision (approved or rejected), which seals the case; nothing is executed afterwards. All data is fictional. Runs fully offline; the LLM is a deterministic mock. Accenture colour theme (colours only, light and dark).
+Agents (Orchestrator, Data Retrieval in five parallel lanes, Reconciliation, Recommendation) and one accountable human decision point (the DRI) — catching **customers billed for days after their service was physically disconnected**, and accounts still active after a disconnect. The process ends at the DRI's decision (approved or rejected), which seals the case; nothing is executed afterwards. All data is fictional. Runs fully offline; the LLM is a deterministic mock. Accenture colour theme (colours only, light and dark).
 
-Rules: [`docs/workflow_rules.md`](docs/workflow_rules.md) (v3.1). Stack and versions: [`docs/deck_notes_stack.md`](docs/deck_notes_stack.md).
+Rules: [`docs/workflow_rules.md`](docs/workflow_rules.md) (v3.2). Stack and versions: [`docs/deck_notes_stack.md`](docs/deck_notes_stack.md).
 
 ## Setup (once — the only step that uses the network)
 
@@ -30,15 +30,12 @@ The source CSVs in `C:\sources\Utilco\data\` are read-only and never written (th
 
 ## Using it
 
-Sign in as Maya (CSR) or Daniel (DRI) — no passwords; "Switch user" in the header. Maya confirms triage and can **look up an account** (Account lookup screen): the agents retrieve and reconcile it at the scenario time; a finding opens a case (LK-…) for triage and the DRI, otherwise it shows "no issue found" and no case is opened. Daniel makes the final decision: approve (the recommendation or another option) or reject (release as-is, cancel as false positive). Pick a dataset and scenario:
+Sign in as Maya (CSR) or Daniel (DRI) — no passwords; "Switch user" in the header; pick a dataset. There is no timeline — cases come from two places:
 
-| Scenario | What happens |
-|---|---|
-| `PREVENTION_REPLAY` (1 Aug → 2 Nov) | Pre-bill checks on each bill run; disconnect follow-up (toggle, default on) opens ADVANCE cases a day after each disconnect |
-| `DISPUTE_REPLAY` (2 → 10 Nov) | As it actually happened: only disputes arrive (Harbourline 4 Nov, regulatory complaint 9 Nov) |
-| `BACKSCAN_2026-11-10` | POC 1 back-scan; the CSR sends findings into the workflow as REMEDIATE cases |
+- **Back-scan** (as of the extract end, 10 Nov 2026): the POC 1 detector lists every account billed after a disconnect; Maya clicks **Send to workflow** (per row or all eligible) and the agents reconcile each one and recommend.
+- **Account lookup**: Maya enters an account number and an **as-of date**; the agents retrieve and reconcile the account as the data stood at 23:59 that day. A finding opens a case (LK-…); if nothing fires it shows "no issue found" and no case is opened.
 
-Timeline: Play / Pause / Step, speed (default one scenario-day per second), the scrubber, presets, and "Pause for humans" (default on). Demo tools (Timeline & demo): reset, simulate stale MDM feed, **Autopilot** (each persona's next recommended action, logged with `autopilot=true`).
+Maya confirms triage (and any ID match); Daniel makes the final decision — approve (the recommendation or another option) or reject (release as-is, cancel as false positive). The decision seals the case.
 
 ## Tests
 
@@ -46,7 +43,7 @@ Timeline: Play / Pause / Step, speed (default one scenario-day per second), the 
 .venv\Scripts\python -m pytest -q
 ```
 
-Plus the in-app Self-test screen (≈500 checks: POC 1 answer keys, every expected result for both datasets and modes, CSR lookups, determinism, SoD/403s, agent guardrails, stale feed, seals, unchanged CSVs, no outbound connections).
+Plus the in-app Self-test screen (≈190 checks: POC 1 answer keys, back-scan → workflow for both datasets, dated CSR lookups, determinism, SoD/403s, agent guardrails, seals, unchanged CSVs, no outbound connections).
 
 ## Offline verification
 
@@ -59,4 +56,4 @@ Plus the in-app Self-test screen (≈500 checks: POC 1 answer keys, every expect
 
 ## Layout
 
-`run.py` · `scripts/setup.py` · `config/` (users & permissions, agent, sla, triage, freshness, rules/v1.0.json, workflow, seed case history, expected results) · `app/` (FastAPI `main.py`, `auth.py`, `datasource/`, `pit.py`, `events.py`, `rules.py`, `calculator.py`, `prebill.py`, `agents/`, `workflow.py`, `evidence.py`, `audit.py`, `knowledge.py`, `outputs.py` (dormant output templates), `kpi.py`, `backscan.py`, `selftest.py`, `engine.py`, `guard.py`) · `static/` · `docs/` · `tests/` · `models/` and `state/` (created at run time).
+`run.py` · `scripts/setup.py` · `config/` (users & permissions, agent, sla, triage, freshness, rules/v1.0.json, workflow, seed case history, expected results) · `app/` (FastAPI `main.py`, `auth.py`, `datasource/`, `pit.py`, `rules.py`, `calculator.py`, `intake.py`, `agents/`, `workflow.py`, `evidence.py`, `audit.py`, `knowledge.py`, `outputs.py` (dormant output templates), `kpi.py`, `backscan.py`, `selftest.py`, `engine.py`, `guard.py`) · `static/` · `docs/` · `tests/` · `models/` and `state/` (created at run time).

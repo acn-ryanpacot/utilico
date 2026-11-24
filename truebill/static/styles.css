@@ -47,13 +47,8 @@ header.top .top-row .brand p{color:var(--hdr-muted)}
 .badge.warn{background:var(--med-bg);color:var(--med);border-color:transparent}
 .badge.bad{background:var(--high-bg);color:var(--high);border-color:transparent}
 .badge.ok{background:var(--pass-bg);color:var(--pass);border-color:transparent}
-.tl-row{display:flex;align-items:center;gap:10px;padding:6px 16px;border-top:1px solid #2c2535;flex-wrap:wrap;background:var(--hdr-2);color:var(--hdr-text)}
-.tl-row .btn,.tl-row .input{background:transparent;color:var(--hdr-text);border-color:#5a4c6b}
-.tl-row .btn:hover{border-color:var(--accent)}
-.clock{font-weight:700;font-variant-numeric:tabular-nums;min-width:132px}
 .switch{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;user-select:none}
 .switch input{accent-color:var(--accent)}
-.scrubber{flex:1;min-width:260px;height:30px}
 .banner{margin:10px 16px 0;padding:9px 12px;border-radius:9px;border:1px solid var(--border);background:var(--accent-soft);font-size:13px}
 .banner.stale,.banner.err{background:var(--high-bg);color:var(--high);border-color:transparent;font-weight:600}
 .shell{display:grid;grid-template-columns:210px minmax(0,1fr);min-height:calc(100vh - 110px)}

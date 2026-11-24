@@ -16,7 +16,6 @@ from .auth import current_user, require
 from .config import Config
 from .datasource import F_READ, KEY_FIELD, SOURCE_FILES, SYSTEM_LABEL, SYSTEM_OF_FILE, Registry
 from .engine import Engine
-from .events import PRESETS, SCENARIOS
 from .kpi import kpis
 from .knowledge import KnowledgeBase
 from .pit import View
@@ -68,9 +67,7 @@ def create_app(data_dir=None, state_root=STATE_DIR):
         return resp
 
     def ctx(request):
-        ds = request.headers.get("x-dataset-id") or "dataset_A_with_errors"
-        sc = request.headers.get("x-scenario-id") or "PREVENTION_REPLAY"
-        return eng.session(ds, sc)
+        return eng.session(request.headers.get("x-dataset-id") or "dataset_A_with_errors")
 
     # ---- static -------------------------------------------------------------------------------------
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -111,18 +108,15 @@ def create_app(data_dir=None, state_root=STATE_DIR):
     @app.get("/api/datasets")
     async def datasets(request: Request):
         current_user(cfg, request)
-        return {"datasets": st.registry.list(), "scenarios": [{"id": k, **v} for k, v in SCENARIOS.items()],
-                "presets": [{"id": k, **v} for k, v in PRESETS.items()], "data_dir": st.data_dir}
+        from .engine import DATA_START, EXTRACT_END
+        return {"datasets": st.registry.list(), "data_dir": st.data_dir, "data_start": DATA_START, "extract_end": EXTRACT_END}
 
     @app.post("/api/context")
     async def context(request: Request, body: Body):
         u = current_user(cfg, request)
         b = body.model_dump()
         s = ctx(request)
-        if b.get("changed") == "dataset":
-            s.log(u["user_id"], "DATASET_SWITCH", "dataset", s.ds.id, before={"dataset_id": b.get("previous")}, after={"dataset_id": s.ds.id})
-        elif b.get("changed") == "scenario":
-            s.log(u["user_id"], "SCENARIO_SWITCH", "scenario", s.sc_id, before={"scenario_id": b.get("previous")}, after={"scenario_id": s.sc_id})
+        s.log(u["user_id"], "DATASET_SWITCH", "dataset", s.ds.id, before={"dataset_id": b.get("previous")}, after={"dataset_id": s.ds.id})
         return {"ok": True}
 
     def mywork(u, s):
@@ -139,7 +133,7 @@ def create_app(data_dir=None, state_root=STATE_DIR):
                 items.append({"case_id": c["case_id"], "type": c["type"], "customer_name": c["customer_name"], "account_id": c["account_id"],
                               "amount": c["amount"], "priority": c["priority"], "triage": (c.get("triage") or {}).get("colour"), "state": c["state"],
                               "next_action": na, "sla": sv.get("resolve"), "sla_first": sv.get("first_action"), "sla_worst": sv["worst"], "returned": c["returned"]})
-        if p == "CSR" and s.sc_id == "BACKSCAN_2026-11-10":
+        if p == "CSR":
             n = sum(1 for r in s.backscan_candidates() if r["eligible"] and not r["sent"])
             if n:
                 items.append({"case_id": None, "type": "BACKSCAN", "next_action": "Send %d eligible back-scan finding(s) to the workflow" % n, "priority": None})
@@ -151,7 +145,7 @@ def create_app(data_dir=None, state_root=STATE_DIR):
         rec = c.get("recommendation") or {}
         sv = s.sla_view(c)
         return {k: c.get(k) for k in ("case_id", "jira_id", "type", "state", "returned", "account_id", "customer_name", "amount", "priority", "wo_id",
-                                      "opened_at", "rules_fired", "flags", "linked_case_id")} | {
+                                      "opened_at", "as_of", "lookup", "rules_fired", "flags", "linked_case_id")} | {
             "code": s.ds.case_codes.get(c["account_id"]), "triage": (c.get("triage") or {}).get("colour"), "option": rec.get("option"),
             "label": rec.get("label"), "cause": rec.get("probable_cause"), "confidence": rec.get("confidence"), "sla_worst": sv["worst"],
             "sla": sv.get("resolve"), "match": c["match"]["status"], "agent_error": c.get("agent_error"), "waiting_on": cfg.workflow()["human_states"].get(c["state"])}
@@ -160,65 +154,8 @@ def create_app(data_dir=None, state_root=STATE_DIR):
     async def state(request: Request):
         u = current_user(cfg, request)
         s = ctx(request)
-        return {"timeline": s.timeline_view(), "mywork": len(mywork(u, s)), "knowledge": {"mode": st.kb.mode, "error": st.kb.error},
-                "freshness": s.freshness(), "dataset": s.ds.id, "scenario": s.sc_id, "case_codes": s.ds.case_codes,
-                "busy": not s.idle(), "errors": eng.errors[-3:]}
-
-    # ---- timeline and demo controls --------------------------------------------------------------------
-    @app.post("/api/timeline/{op}")
-    async def timeline(op: str, request: Request, body: Body):
-        u = require(st, request, "timeline", ("A",), "control the timeline")
-        s = ctx(request)
-        b = body.model_dump()
-        if op == "play":
-            s.play(u["user_id"], speed=b.get("speed"))
-        elif op == "pause":
-            s.pause(u["user_id"])
-        elif op == "step":
-            ev = await s.step(u["user_id"])
-            return {"event": ev}
-        elif op == "speed":
-            s.state["timeline"]["speed"] = float(b.get("speed") or 1)
-            s.save()
-        elif op == "preset":
-            p = PRESETS.get(b.get("preset"))
-            if not p:
-                raise NotFound("Unknown preset")
-            if p["scenario"] != s.sc_id:
-                raise AppError("Preset '%s' belongs to %s - switch scenario first" % (p["label"], p["scenario"]))
-            if p.get("reset"):
-                s.reset(u["user_id"], "Preset: %s" % p["label"])
-            elif p["target"] and p["target"] <= s.clock:
-                raise AppError("The scenario clock is already past %s - reset the scenario to replay it" % p["target"])
-            else:
-                s.play(u["user_id"], target=p["target"])
-        elif op == "toggle":
-            s.set_toggle(u["user_id"], b["name"], b["value"])
-        else:
-            raise NotFound("Unknown timeline op")
-        return {"timeline": s.timeline_view()}
-
-    @app.post("/api/demo/{op}")
-    async def demo(op: str, request: Request, body: Body):
-        u = require(st, request, "timeline", ("A",), "use the demo tools")
-        s = ctx(request)
-        b = body.model_dump()
-        if op == "reset":
-            if b.get("scope") == "all":
-                for (dsid, scid) in [(d["id"], sc) for d in st.registry.list() for sc in SCENARIOS]:
-                    eng.session(dsid, scid).reset(u["user_id"], "Reset all scenarios")
-            else:
-                s.reset(u["user_id"])
-        elif op == "stale_feed":
-            s.set_toggle(u["user_id"], "stale_mdm", bool(b.get("value")))
-        elif op == "autopilot":
-            on = bool(b.get("value", True))
-            s.set_toggle(u["user_id"], "autopilot", on)
-            if on and s.pending_events() and not s.state["timeline"]["playing"]:
-                s.play(u["user_id"], speed=float(b.get("speed") or 4))
-        else:
-            raise NotFound("Unknown demo op")
-        return {"timeline": s.timeline_view()}
+        return {"mywork": len(mywork(u, s)), "knowledge": {"mode": st.kb.mode, "error": st.kb.error}, "extract_end": s.state["clock"],
+                "dataset": s.ds.id, "case_codes": s.ds.case_codes, "busy": not s.idle(), "errors": eng.errors[-3:]}
 
     # ---- dashboard, my work, cases --------------------------------------------------------------------
     @app.get("/api/dashboard")
@@ -231,7 +168,7 @@ def create_app(data_dir=None, state_root=STATE_DIR):
         elif feed == "mycases":
             f["case_ids"] = sorted({e["case_id"] for e in eng.audit.events if e.get("actor_id") == u["user_id"] and e.get("case_id")})
         return {"kpis": kpis(s), "feed": eng.audit.query(f, 25)["events"], "mywork": mywork(u, s)[:5],
-                "runs": s.state["runs"], "cases": [case_row(s, c) for c in s.state["cases"].values()]}
+                "cases": [case_row(s, c) for c in s.state["cases"].values() if c["state"] != "NO_ISSUE"]}
 
     @app.get("/api/mywork")
     async def my_work(request: Request):
@@ -248,13 +185,14 @@ def create_app(data_dir=None, state_root=STATE_DIR):
     @app.post("/api/lookup")
     async def lookup(request: Request, body: Body):
         u = require(st, request, "lookup", ("A",), "look up an account")
-        return ctx(request).lookup(u, body.model_dump().get("account_id"))
+        b = body.model_dump()
+        return ctx(request).lookup(u, b.get("account_id"), b.get("as_of"))
 
     @app.get("/api/lookup")
     async def lookups(request: Request):
         require(st, request, "lookup", ("A",), "open Account lookup")
         s = ctx(request)
-        return {"clock": s.clock, "items": [case_row(s, c) | {"reconciled": bool(c.get("reconciliation")), "facts": len(s.evidence.for_case(c["case_id"]))}
+        return {"extract_end": s.state["clock"], "items": [case_row(s, c) | {"reconciled": bool(c.get("reconciliation")), "facts": len(s.evidence.for_case(c["case_id"]))}
                                             for c in sorted(s.state["cases"].values(), key=lambda c: c["case_id"], reverse=True) if c.get("lookup")]}
 
     @app.get("/api/cases/{case_id}")
@@ -289,16 +227,16 @@ def create_app(data_dir=None, state_root=STATE_DIR):
     async def backscan(request: Request):
         require(st, request, "backscan")
         s = ctx(request)
-        v = s.view(sandbox=False) if s.sc_id == "BACKSCAN_2026-11-10" else View(s.ds, "2026-11-10 23:59")
+        v = View(s.ds, s.state["clock"])
         det = BS.detect(v, v.Tdate)
-        cand = s.backscan_candidates() if s.sc_id == "BACKSCAN_2026-11-10" else []
+        cand = s.backscan_candidates()
         by_wo = {r["wo_id"]: r for r in cand}
         return {"as_of": v.Tdate, "findings": [dict(BS.finding_json(f), workflow=by_wo.get(f["wo"]["wo_id"])) for f in det["back"]["findings"]],
                 "unmatched": [{"wo_id": u["wo"]["wo_id"], "premise": u["wo"]["oms_premise_id"], "suggestion": u["suggestion"], "exposure": float(u["exposure"] or 0),
                                "account_id": u["account_id"], "subtype": u["wo"]["wo_subtype"], "disconnect_at": u["wo"]["completed_at"],
                                "workflow": by_wo.get(u["wo"]["wo_id"])} for u in det["back"]["unmatched"]],
                 "total_credit": float(det["back"]["total_credit"]), "scanned": det["back"]["scanned"], "matched": det["back"]["matched"],
-                "scan": [det["scan_start"], det["scan_end"]], "can_send": s.sc_id == "BACKSCAN_2026-11-10", "case_codes": s.ds.case_codes}
+                "scan": [det["scan_start"], det["scan_end"]], "can_send": True, "case_codes": s.ds.case_codes}
 
     @app.post("/api/backscan/send")
     async def backscan_send(request: Request, body: Body):
@@ -309,8 +247,8 @@ def create_app(data_dir=None, state_root=STATE_DIR):
     async def daily(request: Request, as_of: str = None):
         require(st, request, "daily")
         s = ctx(request)
-        as_of = as_of or s.clock[:10]
-        v = View(s.ds, as_of + " 23:59", s.sandbox.overlays, set(s.state["unissued"]))
+        as_of = as_of or "2026-11-02"
+        v = View(s.ds, as_of + " 23:59")
         det = BS.detect(v, as_of)
         rows = []
         for h in det["daily"]["holds"]:
@@ -372,7 +310,7 @@ def create_app(data_dir=None, state_root=STATE_DIR):
         w.writerow(AUDIT_COLS)
         for e in evs:
             w.writerow([json.dumps(e.get(c), ensure_ascii=False) if isinstance(e.get(c), (dict, list)) else e.get(c) for c in AUDIT_COLS])
-        eng.log(request.headers.get("x-dataset-id"), request.headers.get("x-scenario-id"), None, u["user_id"], "AUDIT_EXPORTED", "audit_log", "csv",
+        eng.log(request.headers.get("x-dataset-id"), "WORKSPACE", None, u["user_id"], "AUDIT_EXPORTED", "audit_log", "csv",
                 after={"events": len(evs), "filters": audit_filters(request)})
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="audit_log.csv"'})
 
@@ -391,7 +329,7 @@ def create_app(data_dir=None, state_root=STATE_DIR):
     @app.get("/api/stream")
     async def stream(request: Request):
         current_user(cfg, request)
-        ds, sc = request.headers.get("x-dataset-id"), request.headers.get("x-scenario-id")
+        ds, sc = request.headers.get("x-dataset-id"), "WORKSPACE"
         q = asyncio.Queue(maxsize=2000)
         eng.subscribers.add(q)
 

@@ -9,7 +9,7 @@ Versions actually installed by `scripts/setup.py` on Windows 11 (2026-11-24). Ev
 | Frontend | Plain HTML + Alpine.js, vendored in `static/vendor/` (no CDN, no build step); charts as inline SVG | Alpine.js **3.17.5** |
 | Live updates | Server-Sent Events (FastAPI `StreamingResponse`, `text/event-stream`) | - |
 | Vector store | ChromaDB with local MiniLM embeddings (all-MiniLM-L6-v2, ONNX) | chromadb **1.5.9** · onnxruntime 1.31.1 · tokenizers 0.23.3 · numpy 2.5.4 |
-| Orchestrator / agents | Mock: deterministic rules + templated agent text behind a swappable `LLMClient` (`ClaudeLLMClient` stub). Orchestrator, Data Retrieval, Reconciliation, Recommendation; the process ends at the DRI's decision (no Execution agent) | - |
+| Orchestrator / agents | Mock: deterministic rules + templated agent text behind a swappable `LLMClient` (`ClaudeLLMClient` stub). Orchestrator, Data Retrieval, Reconciliation, Recommendation; cases come from the back-scan and the CSR's dated account lookup (no timeline); the process ends at the DRI's decision (no Execution agent) | - |
 | UI theme | Accenture colour palette (Core Purple #A100FF, purples #7500C0 / #460073 / #BE82FF / #DCAFFF / #E6DCFF, black, white), light and dark; colours only, system font | - |
 | Tests | pytest (+ httpx for FastAPI's TestClient) | pytest 9.2.0 · httpx 0.28.1 |
 

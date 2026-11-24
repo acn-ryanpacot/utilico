@@ -1,5 +1,6 @@
 """Case lifecycle: data-driven state machine (config/workflow.json), priority / SLA / triage, the agent pipeline,
-human actions with segregation of duties, the CSR account lookup, sealing and the autopilot.
+human actions with segregation of duties, the CSR account lookup and sealing. There is no timeline: each case is
+read as of its own time (the CSR's lookup date, or the extract end for the back-scan).
 
 The process ends at the DRI's decision: APPROVED (recommended or another option) or REJECTED (release as-is,
 cancel as false positive). The decision seals the case. There is no execution, Finance step or output drafting.
@@ -12,7 +13,6 @@ from .agents.policies import LANES
 from .agents.runner import run_agent
 from .agents.tools import GuardrailError
 from .calculator import draft_correction, issued_credit, project_exposure
-from .pit import STOP_SUBTYPES, resolve_premise
 from .rules import near_matches
 from .util import D, AppError, PermissionDenied, f2, fmt_money, now_utc, sha256_text
 
@@ -67,7 +67,7 @@ class CaseMixin:
         acc = res["account"] or v.accounts.get(res["sa"]["account_id"], {})
         sa = res["sa"]
         case = {"case_id": case_id, "jira_id": jira, "type": seed["type"], "state": "NEW", "returned": False, "lookup": lookup,
-                "opened_at": self.clock, "opened_real": now_utc(),
+                "as_of": self.clock, "opened_at": self.clock, "opened_real": now_utc(),
                 "origin": {"event_id": ev.get("event_id"), "type": ev.get("type"), "ref": ev.get("ref"), "by": seed.get("origin_user")},
                 "account_id": sa["account_id"], "customer_name": acc.get("customer_name", ""), "customer_class": acc.get("customer_class", ""),
                 "sa_id": sa["sa_id"], "sp_sa_ids": [x["sa_id"] for x in res["sp_sas"]], "premise_address": sa.get("premise_address", ""),
@@ -78,11 +78,9 @@ class CaseMixin:
                 "run_ts": seed.get("run_ts"), "non_blocking_period_end": seed.get("non_blocking_period_end"),
                 "linked_case_id": seed.get("linked_case_id"), "dispute_case_ids": list(seed.get("dispute_case_ids") or []),
                 "flags": {"dispute": False, "regulatory": False}, "history": [], "activity": [], "rule_set_version": self.cfg.rules()["rule_set_version"],
-                "timings": {"event_real": st.get("last_event_real") or now_utc(), "new_real": now_utc()}, "decision": None, "seal": None,
+                "timings": {"event_real": now_utc(), "new_real": now_utc()}, "decision": None, "seal": None,
                 "triage": None, "recommendation": None, "reconciliation": None, "retrieval": None, "agent_error": None, "reruns": 0,
                 "attached_bills": [], "sla": {}, "first_action_real": None}
-        if lookup:
-            case["timings"]["event_real"] = now_utc()
         self.refresh_flags(case, v)
         amt, detail = self.compute_amount(case)
         case["amount"], case["amount_detail"] = amt, detail
@@ -275,11 +273,23 @@ class CaseMixin:
                 "CRM": ["get_crm_cases"], "GL": ["get_gl_lines", "get_gl_period"]}[lane]
 
     # ---- CSR account lookup ------------------------------------------------------------------------------
-    def lookup(self, user, account_id):
-        """Maya enters an account number: the agents retrieve and reconcile it at the current scenario time.
-        Findings -> a case (LK-...) that goes to triage and the DRI; nothing fired -> NO_ISSUE, no case."""
+    def lookup(self, user, account_id, as_of=None):
+        """Maya enters an account number and an "as of" date: the agents retrieve and reconcile the account as it stood
+        at 23:59 that day. Findings -> a case (LK-...) that goes to triage and the DRI; nothing fired -> NO_ISSUE."""
+        from .engine import DATA_START, EXTRACT_END
         if user["persona"] != "CSR":
             self.deny(user, "look up an account (SoD-3: CSR intake)")
+        as_of = (as_of or EXTRACT_END[:10]).strip()
+        try:
+            datetime.strptime(as_of, "%Y-%m-%d")
+        except ValueError:
+            raise AppError("The as-of date must be YYYY-MM-DD")
+        if not DATA_START <= as_of <= EXTRACT_END[:10]:
+            raise AppError("Choose an as-of date between %s and %s (the extract)" % (DATA_START, EXTRACT_END[:10]))
+        with self.at(as_of + " 23:59"):
+            return self._lookup(user, account_id)
+
+    def _lookup(self, user, account_id):
         account_id = (account_id or "").strip()
         v = self.view()
         if account_id not in v.accounts:
@@ -291,20 +301,20 @@ class CaseMixin:
                (w["oms_premise_id"] not in v.xw and any(c["premise"] in prems for c in near_matches(v, w["oms_premise_id"])))]
         if not wos:
             self.log(user["user_id"], "LOOKUP_NO_ISSUE", "account", account_id, None, None, {"disconnects": 0},
-                     "No completed disconnect for this account at %s - no case opened" % self.clock)
-            return {"status": "NO_DISCONNECT", "account_id": account_id, "customer_name": v.accounts[account_id]["customer_name"],
-                    "message": "No completed disconnect for this account at scenario time %s - nothing to check, no case opened." % self.clock}
+                     "No completed disconnect for this account as of %s - no case opened" % self.clock)
+            return {"status": "NO_DISCONNECT", "account_id": account_id, "customer_name": v.accounts[account_id]["customer_name"], "as_of": self.clock,
+                    "message": "No completed disconnect for this account as of %s - nothing to check, no case opened." % self.clock}
         wo = sorted(wos, key=lambda w: w["completed_at"])[-1]
         hit = next((c for c in self.state["cases"].values() if c["account_id"] == account_id and c["wo_id"] == wo["wo_id"] and c["state"] != "NO_ISSUE"), None)
         if hit:
-            return {"status": "EXISTING", "case_id": hit["case_id"], "account_id": account_id, "customer_name": hit["customer_name"],
-                    "message": "This disconnect is already handled in %s (%s)." % (hit["case_id"], hit["state"])}
+            return {"status": "EXISTING", "case_id": hit["case_id"], "account_id": account_id, "customer_name": hit["customer_name"], "as_of": hit.get("as_of"),
+                    "message": "This disconnect is already handled in %s (%s, as of %s)." % (hit["case_id"], hit["state"], hit.get("as_of"))}
         s = self.seed_for(v, wo, "REMEDIATE", origin_user=user["user_id"])
         bills = self.issued_credit_bills(v, s)
         s["type"] = "REMEDIATE" if bills else "ADVANCE"
         c = self.open_case(dict(s, bill_ids=bills, draft_bill_id=None), {"event_id": "LOOKUP", "type": "CSR_LOOKUP", "ref": account_id}, lookup=True)
-        return {"status": "STARTED", "case_id": c["case_id"], "account_id": account_id, "customer_name": c["customer_name"],
-                "message": "Agents are retrieving and reconciling %s (%s, disconnect %s)." % (account_id, c["customer_name"], wo["wo_id"])}
+        return {"status": "STARTED", "case_id": c["case_id"], "account_id": account_id, "customer_name": c["customer_name"], "as_of": self.clock,
+                "message": "Agents are retrieving and reconciling %s (%s, disconnect %s) as of %s." % (account_id, c["customer_name"], wo["wo_id"], self.clock)}
 
     # ---- human actions -----------------------------------------------------------------------------------
     def allowed_actions(self, user, case):
@@ -319,7 +329,7 @@ class CaseMixin:
             out.append(a)
         return out
 
-    def act(self, user, case_id, action, p, autopilot=False):
+    def act(self, user, case_id, action, p):
         case = self.state["cases"].get(case_id)
         if not case:
             raise AppError("Unknown case %s" % case_id)
@@ -331,13 +341,10 @@ class CaseMixin:
         if case["state"] not in states:
             raise AppError("%s is not allowed while the case is %s" % (action, case["state"]))
         reason = (p.get("reason") or "").strip()
-        self._autopilot_flag = autopilot
-        try:
+        with self.at(case.get("as_of") or self.state["clock"]):          # every action on a case is as of the case's time
             if not case.get("first_action_real"):
                 case["first_action_real"] = now_utc()
             getattr(self, "_a_" + action.lower())(user, case, p, reason)
-        finally:
-            self._autopilot_flag = False
         self.save()
         self.publish({"type": "case", "case_id": case_id, "state": case["state"]})
         return case
@@ -425,23 +432,3 @@ class CaseMixin:
     def deny(self, user, what, case_id=None):
         self.log(user["user_id"], "PERMISSION_DENIED", "case" if case_id else "api", case_id or what, case_id, None, {"attempted": what})
         raise PermissionDenied("%s may not %s" % (user["persona"], what))
-
-    # ---- autopilot -----------------------------------------------------------------------------------------
-    def autopilot_step(self):
-        """One recommended human action, or None. Order: oldest case first."""
-        for case in sorted(self.state["cases"].values(), key=lambda c: c["case_id"]):
-            s = case["state"]
-            try:
-                if s == "TRIAGE":
-                    if case["match"]["status"] == "PENDING":
-                        return self.act(self.cfg.user("u.csr"), case["case_id"], "CONFIRM_MATCH",
-                                        {"note": "Autopilot: near-match meter evidence reviewed"}, autopilot=True)
-                    return self.act(self.cfg.user("u.csr"), case["case_id"], "CONFIRM_TRIAGE", {"note": "Autopilot: evidence and customer contact confirmed"}, autopilot=True)
-                if s == "AWAITING_DRI":
-                    rec = case.get("recommendation") or {}
-                    if rec.get("option") == "FLAG":
-                        return self.act(self.cfg.user("u.dri"), case["case_id"], "DECIDE", {"kind": "RELEASE_AS_IS", "reason": "Autopilot: ID match not confirmed"}, autopilot=True)
-                    return self.act(self.cfg.user("u.dri"), case["case_id"], "DECIDE", {"kind": "APPROVE_RECOMMENDED"}, autopilot=True)
-            except AppError:
-                continue
-        return None
