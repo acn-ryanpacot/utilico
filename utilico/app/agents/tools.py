@@ -9,11 +9,20 @@ from ..util import D, day_range, f2
 
 
 class ToolError(Exception):
-    pass
+    """A tool could not answer; the agent sees the error and can carry on."""
+
+
+class ArgumentRejected(ToolError):
+    """A live model's tool call was refused (bad arguments, or a read outside the case). Nothing is read; the agent
+    sees why and can correct itself. Repeated refusals stop the agent (runner.MAX_REJECTED_CALLS)."""
 
 
 class GuardrailError(Exception):
-    pass
+    """Stops the agent. `detail` says exactly what was wrong (logged with the stop, never shown to the model)."""
+
+    def __init__(self, message, detail=None):
+        super().__init__(message)
+        self.detail = detail
 
 
 SPECS = {
@@ -31,8 +40,9 @@ SPECS = {
     "run_rules": "Run R1-R4 and PB1-PB3 (+ probable cause, S-codes) for the case",
     "calculate": "Deterministic money: draft correction or issued-bill credit",
     "project_exposure": "Deterministic projected exposure this cycle (ADVANCE)",
-    "search_knowledge": "Similar past cases (context only)",
+    "search_knowledge": "Similar past cases (context only). collection: case_history (default), rules or thresholds; k: 1-5",
 }
+KNOWLEDGE_COLLECTIONS = ["case_history", "rules", "thresholds"]
 READ_TOOLS = ["get_work_orders", "get_integration_messages", "get_todos", "get_service_agreement", "get_bills", "get_daily_reads",
               "get_meter", "get_crm_cases", "get_gl_lines", "get_gl_period", "find_similar_premises"]
 
@@ -53,7 +63,8 @@ _ARGS = {
     "run_rules": ({}, []),
     "calculate": ({"kind": {"type": "string", "enum": ["draft", "credit"]}, "bill_id": _STRING}, ["kind"]),
     "project_exposure": ({"after_period_end": {"type": ["string", "null"]}}, []),
-    "search_knowledge": ({"query": _STRING, "collection": _STRING, "k": {"type": "integer"}}, ["query"]),
+    "search_knowledge": ({"query": _STRING, "collection": {"type": "string", "enum": KNOWLEDGE_COLLECTIONS},
+                          "k": {"type": "integer", "minimum": 1, "maximum": 5}}, ["query"]),
     "get_case_packet": ({}, []),
 }
 
@@ -226,8 +237,12 @@ def t_run_rules(ctx, a):
     rc = s.cfg.rules()
     rctx = s.rule_ctx(case)
     res = run_rules(v, rctx, rc)
+    near = {f["record_id"]: f["fact_id"] for f in s.evidence.for_case(case["case_id"]) if f.get("kind") == "near_match"}
     for r in res.values():
-        r["fact_ids"] = sorted({ctx.ensure_fact(x) for x in r["records"] if x})
+        ids = {ctx.ensure_fact(x) for x in r["records"] if x}
+        # PB3 also cites the crosswalk near match the OMS agent found (find_similar_premises), when it was read
+        ids |= {near[p] for p in r.get("near_matches", []) if p in near}
+        r["fact_ids"] = sorted(ids)
     cause, label, quote = probable_cause(v, rctx, res, rc, s.affected_run(case))
     sc = s_codes(cause, res, rc)
     return {"rules": res, "fired": fired(res), "cause": cause, "cause_label": label, "cause_quote": quote, "s_codes": sc,
@@ -280,7 +295,12 @@ def t_project_exposure(ctx, a):
 
 
 def t_search_knowledge(ctx, a):
-    hits = ctx.s.knowledge.search(a["query"], a.get("collection", "case_history"), a.get("k", 3))
+    collection = a.get("collection") or "case_history"
+    if collection not in KNOWLEDGE_COLLECTIONS:
+        raise ToolError("unknown collection %r - use one of %s" % (collection, ", ".join(KNOWLEDGE_COLLECTIONS)))
+    k = a.get("k", 3)
+    k = max(1, min(5, k if isinstance(k, int) and not isinstance(k, bool) else 3))
+    hits = ctx.s.knowledge.search(a["query"], collection, k)
     return {"results": hits, "context_only": True}, ", ".join(h["id"] for h in hits)
 
 

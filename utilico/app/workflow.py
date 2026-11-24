@@ -20,8 +20,8 @@ PRIORITY = {("High", "High"): "P1", ("High", "Medium"): "P2", ("Medium", "High")
             ("Low", "High"): "P3", ("Low", "Medium"): "P4"}
 LEVELS = ["Low", "Medium", "High"]
 ACTIONS = {"CONFIRM_MATCH": ("CSR", ["TRIAGE"]), "REJECT_MATCH": ("CSR", ["TRIAGE"]), "CONFIRM_TRIAGE": ("CSR", ["TRIAGE"]),
-           "DECIDE": ("DRI", ["AWAITING_DRI"])}
-SOD = {"DECIDE": "SoD-2", "CONFIRM_MATCH": "SoD-3", "REJECT_MATCH": "SoD-3", "CONFIRM_TRIAGE": "SoD-3"}
+           "DECIDE": ("DRI", ["AWAITING_DRI"]), "RERUN_AGENTS": ("CSR", ["NEW", "RETRIEVING", "RECONCILING", "RECOMMENDING"])}
+SOD = {"DECIDE": "SoD-2", "CONFIRM_MATCH": "SoD-3", "REJECT_MATCH": "SoD-3", "CONFIRM_TRIAGE": "SoD-3", "RERUN_AGENTS": "SoD-3"}
 OPTION_LABEL = {"PRORATE": "Prorate", "SUPPRESS": "Suppress", "FLAG": "Flag", "RESPOND": "Respond", "RELEASE_AS_IS": "Release as-is"}
 DECIDED = ("APPROVED", "REJECTED")
 TERMINAL = DECIDED + ("NO_ISSUE",)
@@ -214,10 +214,12 @@ class CaseMixin:
         b.update(extra)
         return b
 
-    async def pipeline(self, case_id, rerun=False):
+    async def pipeline(self, case_id, rerun=False, restart=False):
+        """rerun: re-run after a confirmed ID match (keeps the initial rules / option). restart: the CSR re-ran the
+        agents after a guardrail stop (the case is already back in RETRIEVING)."""
         case = self.state["cases"][case_id]
         try:
-            if not rerun:
+            if not rerun and not restart:
                 self.transition(case, "RETRIEVING", "agent.orchestrator", after={"lanes": list(LANES)})
             started = now_utc()
             tasks = [asyncio.create_task(run_agent(self, case, "agent.retrieval", self.brief(case, lane=lane),
@@ -269,10 +271,17 @@ class CaseMixin:
                       "packet_seconds": round(real_hours_between(case["timings"]["new_real"], case["timings"].get("recommended_real") or now_utc()) * 3600, 3)})
             self.transition(case, "TRIAGE", "agent.recommendation")
         except GuardrailError as e:
-            case["agent_error"] = str(e)
-            self.log("agent.orchestrator", "AGENT_TOOL_CALL", "case", case_id, case_id, None, {"guardrail": str(e)}, "Guardrail stopped the agent")
-            self.save()
-            self.publish({"type": "case", "case_id": case_id, "state": case["state"]})
+            self.stop_case(case, str(e), getattr(e, "detail", None))
+        except Exception as e:             # an unexpected error must not leave the case stuck without a way to re-run it
+            self.stop_case(case, "internal error (%s)" % type(e).__name__, None)
+            raise
+
+    def stop_case(self, case, error, detail):
+        case["agent_error"] = error
+        self.log("agent.orchestrator", "AGENT_TOOL_CALL", "case", case["case_id"], case["case_id"], None,
+                 {"guardrail": error, "detail": detail, "state": case["state"]}, "Guardrail stopped the agent")
+        self.save()
+        self.publish({"type": "case", "case_id": case["case_id"], "state": case["state"]})
 
     def lane_tools(self, lane):
         return {"OMS": ["get_work_orders", "get_integration_messages", "find_similar_premises"],
@@ -333,6 +342,8 @@ class CaseMixin:
                 continue
             if a == "CONFIRM_TRIAGE" and case["match"]["status"] == "PENDING":
                 continue
+            if a == "RERUN_AGENTS" and not case.get("agent_error"):
+                continue
             out.append(a)
         return out
 
@@ -368,6 +379,16 @@ class CaseMixin:
         case["reruns"] += 1
         self.transition(case, "RETRIEVING", user["user_id"], reason="ID match confirmed - re-running retrieval, reconciliation and recommendation once")
         self.spawn(self.pipeline(case["case_id"], rerun=True))
+
+    def _a_rerun_agents(self, user, case, p, reason):
+        prev = case.get("agent_error")
+        if not prev:
+            raise AppError("The agents are still working on %s - re-run is only for a case a guardrail stopped" % case["case_id"])
+        case["agent_error"] = None
+        case["agent_retries"] = case.get("agent_retries", 0) + 1
+        self.transition(case, "RETRIEVING", user["user_id"], reason="Re-run the agents after a guardrail stop: %s" % prev,
+                        after={"previous_error": prev, "retry": case["agent_retries"]}, action="AGENT_RERUN_REQUESTED")
+        self.spawn(self.pipeline(case["case_id"], rerun=case.get("reruns", 0) > 0, restart=True))
 
     def _a_reject_match(self, user, case, p, reason):
         reason = reason or (p.get("note") or "").strip()

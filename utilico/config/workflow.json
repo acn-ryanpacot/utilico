@@ -11,6 +11,10 @@
     {"from": "RECONCILING", "to": "NO_ISSUE", "actor": "agent.reconciliation", "note": "CSR account lookup where no rule fired"},
     {"from": "RECOMMENDING", "to": "TRIAGE", "actor": "agent.recommendation"},
     {"from": "TRIAGE", "to": "RETRIEVING", "actor": "CSR", "note": "confirmed ID match re-runs retrieval, reconciliation and recommendation once"},
+    {"from": "NEW", "to": "RETRIEVING", "actor": "CSR", "note": "re-run the agents after a guardrail stopped them"},
+    {"from": "RETRIEVING", "to": "RETRIEVING", "actor": "CSR", "note": "re-run the agents after a guardrail stopped them"},
+    {"from": "RECONCILING", "to": "RETRIEVING", "actor": "CSR", "note": "re-run the agents after a guardrail stopped them"},
+    {"from": "RECOMMENDING", "to": "RETRIEVING", "actor": "CSR", "note": "re-run the agents after a guardrail stopped them"},
     {"from": "TRIAGE", "to": "AWAITING_DRI", "actor": "CSR"},
     {"from": "AWAITING_DRI", "to": "APPROVED", "actor": "DRI", "note": "approve the recommendation, or choose another option (reason)"},
     {"from": "AWAITING_DRI", "to": "REJECTED", "actor": "DRI", "note": "release as-is (override, reason) or cancel as a false positive (reason)"}

@@ -25,9 +25,15 @@ Starts Uvicorn on `http://127.0.0.1:8501/` and opens the browser. Options: `--po
 
 ### Live model
 
-Set `MODEL_API_BASE_URL`, `MODEL_NAME`, and optionally `MODEL_TIMEOUT_SECONDS` in `utilico/.env`. The base URL must omit `/chat/completions` and use HTTPS (HTTP is allowed for localhost). Supply `MODEL_API_KEY` as a process environment variable; process environment variables override the file. Never put a real API key in the shared `.env` file. The endpoint must support OpenAI-compatible Chat Completions, function calling, and JSON response format.
+Copy `utilico/.env.example` to `utilico/.env` and set `MODEL_API_BASE_URL`, `MODEL_NAME`, `MODEL_API_KEY` and optionally `MODEL_TIMEOUT_SECONDS`. `.env` is git-ignored, so your key stays on your machine; never put a real key in `.env.example`. Process environment variables override the file. The base URL must omit `/chat/completions` and use HTTPS (HTTP is allowed for localhost). The endpoint must support OpenAI-compatible Chat Completions, function calling, and JSON response format.
 
 Set `config/agent.json` mode to `openai-compatible` and restart the app. Case details and tool results are sent to the configured model provider. Retrieval, reconciliation and recommendation agents call the model when a case is started or rerun; the human DRI still makes the final decision. Tool availability, cited facts, deterministic calculations, and output validation remain server-side.
+
+How the guardrails treat a live model:
+- **Fixed facts are filled by the server.** Cause, cause label, S-codes, rule-set version, amount, amount citation and calculation come from `run_rules`, `calculate` and `project_exposure`, as do the retrieval lane and fact count. The model writes the explanations, rationale, signals, confidence and alternatives.
+- **Refused tool calls are recoverable.** A call with bad arguments, or one naming another customer's account, SA, meter, bill or work order, is refused and nothing is read. The model is told why and can carry on. Work orders on the case's own premise, such as the reconnect, are allowed. More than 3 refusals stop the agent.
+- **A rejected answer gets one repair turn.** If the answer fails validation, it is sent back once with the reason before the agent is stopped (`max_repairs` in `config/agent.json`, default 1). Each rejection is logged as `AGENT_OUTPUT_REJECTED`, with exactly what differed.
+- **Stopped cases can be re-run.** A case a guardrail stopped shows **Re-run the agents** to Maya (CSR), logged as `AGENT_RERUN_REQUESTED`.
 
 `max_tool_calls: null` removes the per-agent tool-call cap. Repeated model calls can continue indefinitely and incur costs; use a positive integer to enforce a limit. Set the mode to `mock` and restart to use scripted agents without model requests. The in-app self-test always uses mock agents and a 12-call cap.
 

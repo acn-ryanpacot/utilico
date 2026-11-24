@@ -22,7 +22,7 @@ function aiUtilico() {
   return {
     users: [], agent: null, knowledgeMode: null, me: null, perms: {}, labels: {}, datasets: [],
     dsId: 'dataset_A_with_errors', route: { screen: 'dashboard', id: null }, nav: NAV,
-    st: null, data: {}, caseData: null, toastMsg: null, toastErr: false, labelsOn: false, feedFilter: 'all',
+    st: null, data: {}, caseData: null, toastMsg: null, toastErr: false, feedFilter: 'all',
     auditF: {}, auditVerify: null, selftest: null, selftestRunning: false, explorer: { file: 'oms_work_orders.csv', q: '', page: 0 },
     lookupAcc: '', lookupAsOf: '2026-11-10', lookupResult: null, lookupBusy: false,
     knowledgeQ: 'Commercial disconnect not synced; full cycle billed', knowledgeColl: 'case_history', dailyAsOf: '2026-11-02',
@@ -32,8 +32,6 @@ function aiUtilico() {
     async init() {
       try { const j = await (await fetch('/api/users')).json(); this.users = j.users; this.agent = j.agent; this.knowledgeMode = j.knowledge.mode; }
       catch (e) { this.toast('Cannot reach the local server: ' + e, true); }
-      const saved = (() => { try { return JSON.parse(localStorage.getItem('tb.ctx') || '{}'); } catch (e) { return {}; } })();
-      if (saved.dsId) this.dsId = saved.dsId;
       window.addEventListener('hashchange', () => this.readHash());
     },
     hdrs() { return { 'X-User-Id': this.me ? this.me.user_id : '', 'X-Dataset-Id': this.dsId }; },
@@ -50,7 +48,6 @@ function aiUtilico() {
     initials(n) { return (n || '').split(/\s+/).map(x => x[0]).join('').slice(0, 2); },
     can(screen) { return this.perms[screen] && this.perms[screen] !== '-'; },
     lvl(screen) { return this.perms[screen] || '-'; },
-    code(acc) { return this.labelsOn && this.st && this.st.case_codes ? this.st.case_codes[acc] : null; },
 
     // ---- sign-in / context ----------------------------------------------------------------------------------
     async signIn(uid) {
@@ -64,13 +61,6 @@ function aiUtilico() {
       await this.refreshState();
     },
     signOut() { this.me = null; this.stopSSE(); },
-    async switchCtx(kind) {
-      try { localStorage.setItem('tb.ctx', JSON.stringify({ dsId: this.dsId })); } catch (e) { }
-      await this.api('/api/context', { method: 'POST', body: { changed: kind } });
-      this.connectSSE(); this.caseData = null;
-      if (this.route.screen === 'case') location.hash = '#/cases'; else this.load();
-      this.refreshState();
-    },
     readHash() {
       const p = location.hash.replace(/^#\/?/, '').split('/');
       this.route = { screen: p[0] || 'dashboard', id: p[1] ? decodeURIComponent(p[1]) : null };

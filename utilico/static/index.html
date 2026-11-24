@@ -35,13 +35,11 @@
 <header class="top">
   <div class="top-row">
     <div class="brand"><div class="logo">AU</div><div><h1>AI-Utilico</h1><p>OMS × CC&amp;B × MDM × CRM × GL</p></div></div>
-    <select class="input" x-model="dsId" @change="switchCtx('dataset')" aria-label="Dataset"><template x-for="d in datasets" :key="d.id"><option :value="d.id" x-text="d.name" :selected="d.id===dsId"></option></template></select>
     <span class="badge agent" x-text="agent ? agent.label : 'Agent: mock (scripted)'"></span>
     <span class="badge" :class="st && st.knowledge.mode==='chromadb' ? 'ok' : 'warn'" x-text="st && st.knowledge.mode==='chromadb' ? 'Knowledge: ChromaDB (local MiniLM)' : 'Knowledge store: fallback mode'"></span>
     <span class="badge" :class="sseOn ? 'ok' : 'warn'" x-text="sseOn ? 'live' : 'reconnecting…'"></span>
     <div class="spacer"></div>
     <button class="btn sm" @click="go('mywork')">My Work <span class="cnt" x-text="st ? st.mywork : 0"></span></button>
-    <label class="switch" title="Show sample case codes E1–E7 from answer_key.csv"><input type="checkbox" x-model="labelsOn"> codes</label>
     <span class="avatar" x-text="initials(me.name)"></span><div style="line-height:1.1"><b x-text="me.name"></b><div class="muted" style="font-size:11.5px" x-text="me.title"></div></div>
     <button class="btn sm" @click="signOut()">Switch user</button>
   </div>
@@ -108,7 +106,7 @@
           <template x-for="i in data.items" :key="(i.case_id||'x')+i.next_action"><tr class="click" @click="i.case_id ? go('case', i.case_id) : go('backscan')">
             <td><span class="prio" :class="i.priority" x-text="i.priority"></span></td><td><span class="sla" :class="i.sla_worst" x-show="i.sla" x-text="i.sla ? (i.sla.status==='MET' ? 'met' : i.sla.remaining_hours + ' h left') : ''"></span></td>
             <td><span class="tri" :class="i.triage" x-show="i.triage"></span><span x-text="i.triage||''"></span></td><td><span class="type" :class="i.type" x-text="i.type"></span></td>
-            <td class="mono" x-text="i.case_id || '—'"></td><td><span x-text="i.customer_name||''"></span><span class="code" x-show="code(i.account_id)" x-text="code(i.account_id)"></span></td>
+            <td class="mono" x-text="i.case_id || '—'"></td><td><span x-text="i.customer_name||''"></span></td>
             <td class="r num" x-text="i.amount!==undefined ? money(i.amount) : ''"></td><td><b x-text="i.next_action"></b><span class="badge warn" x-show="i.returned">returned</span></td></tr></template></tbody></table>
           <div class="empty" x-show="!data.items.length">Nothing is waiting on you.</div></div></div></div>
     </template>
@@ -135,7 +133,7 @@
         <div class="card"><div class="card-head"><h3>Your lookups</h3><span class="muted" x-text="data.items.length + ' lookup(s)'"></span></div>
           <div class="table-wrap"><table class="grid"><thead><tr><th>Lookup</th><th>Account</th><th>Customer</th><th>Result</th><th>Rules fired</th><th class="r">Amount</th><th>Facts</th><th>As of</th></tr></thead><tbody>
             <template x-for="i in data.items" :key="i.case_id"><tr class="click" @click="go('case', i.case_id)">
-              <td class="mono" x-text="i.case_id"></td><td class="mono" x-text="i.account_id"></td><td><span x-text="i.customer_name"></span><span class="code" x-show="code(i.account_id)" x-text="code(i.account_id)"></span></td>
+              <td class="mono" x-text="i.case_id"></td><td class="mono" x-text="i.account_id"></td><td><span x-text="i.customer_name"></span></td>
               <td><span class="state" :class="stateClass(i.state)" x-text="i.state==='NO_ISSUE' ? 'no issue' : i.state"></span></td>
               <td><template x-for="r in (i.rules_fired||[])" :key="r"><span class="rule on" x-text="r"></span></template><span class="faint" x-show="i.reconciled && !(i.rules_fired||[]).length">none</span></td>
               <td class="r num" x-text="i.state==='NO_ISSUE' ? '—' : money(i.amount)"></td><td x-text="i.facts"></td><td class="num" x-text="i.opened_at"></td></tr></template></tbody></table>
@@ -150,7 +148,7 @@
             <td class="mono" x-text="c.case_id"></td><td><span class="type" :class="c.type" x-text="c.type"></span></td><td><span class="prio" :class="c.priority" x-text="c.priority"></span></td>
             <td><span class="state" :class="stateClass(c.state)" x-text="c.state"></span><div class="faint" x-show="c.waiting_on" x-text="'waiting on ' + c.waiting_on"></div></td>
             <td><span class="sla" :class="c.sla_worst" x-text="c.sla_worst"></span></td><td><span class="tri" :class="c.triage"></span><span x-text="c.triage||'—'"></span></td>
-            <td><span x-text="c.customer_name"></span><span class="code" x-show="code(c.account_id)" x-text="code(c.account_id)"></span></td><td class="r num" x-text="money(c.amount)"></td>
+            <td><span x-text="c.customer_name"></span></td><td class="r num" x-text="money(c.amount)"></td>
             <td><template x-for="r in (c.rules_fired||[])" :key="r"><span class="rule on" x-text="r"></span></template></td><td x-text="c.label || (c.agent_error ? 'guardrail: ' + c.agent_error : '…')"></td><td class="num" x-text="c.opened_at"></td></tr></template></tbody></table>
           <div class="empty" x-show="!data.cases.length">No cases yet. Maya sends back-scan findings or looks up an account to open cases.</div></div></div></div>
     </template>
@@ -160,7 +158,7 @@
       <div>
         <a href="#/cases">← Cases</a>
         <div class="page-head" style="margin-top:6px"><div>
-          <h2><span class="mono" x-text="caseData.case_id"></span> <span class="type" :class="caseData.type" x-text="caseData.type"></span> <span x-text="caseData.customer_name"></span><span class="code" x-show="code(caseData.account_id)" x-text="code(caseData.account_id)"></span></h2>
+          <h2><span class="mono" x-text="caseData.case_id"></span> <span class="type" :class="caseData.type" x-text="caseData.type"></span> <span x-text="caseData.customer_name"></span></h2>
           <p><span class="prio" :class="caseData.priority" x-text="caseData.priority"></span> <span class="muted" x-text="caseData.impact + ' impact × ' + caseData.urgency + ' urgency'"></span> ·
             SLA first action <span class="sla" :class="caseData.sla_view.first_action && caseData.sla_view.first_action.status" x-text="caseData.sla_view.first_action ? caseData.sla_view.first_action.status : ''"></span>
             resolve <span class="sla" :class="caseData.sla_view.resolve && caseData.sla_view.resolve.status" x-text="caseData.sla_view.resolve ? (caseData.sla_view.resolve.status + ' · due ' + hhmm(caseData.sla_view.resolve.due)) : ''"></span> ·
@@ -184,6 +182,9 @@
             <p class="muted" x-show="!readsFact()">No reads after the disconnect are visible yet as of this case's date.</p>
             <textarea x-model="form.note" placeholder="Evidence note (required to reject)"></textarea>
             <div class="row"><button class="btn primary" @click="act('CONFIRM_MATCH')">Confirm match (re-runs the agents once)</button><button class="btn danger" @click="act('REJECT_MATCH', {reason: form.note})">Reject match</button></div></div>
+          <div class="sec" x-show="allowed('RERUN_AGENTS')"><h4>Agents stopped by a guardrail</h4>
+            <p class="muted">Nothing was decided or changed. Re-run retrieval, reconciliation and recommendation for this case as of <b x-text="caseData.as_of || caseData.opened_at"></b>. The audit log has what the guardrail rejected.</p>
+            <div class="row"><button class="btn primary" @click="act('RERUN_AGENTS')">Re-run the agents</button></div></div>
           <div class="sec" x-show="allowed('CONFIRM_TRIAGE')"><h4>Triage - confirm the evidence and customer contact</h4><textarea x-model="form.note" placeholder="Note (optional)"></textarea><div class="row"><button class="btn primary" @click="act('CONFIRM_TRIAGE')">Confirm triage</button></div></div>
           <div class="sec" x-show="allowed('DECIDE')"><h4>Decision (single decision point)</h4>
             <label class="opt" :class="{dis: (caseData.recommendation||{}).option==='FLAG'}"><input type="radio" value="APPROVE_RECOMMENDED" x-model="form.kind" :disabled="(caseData.recommendation||{}).option==='FLAG'"><span>Approve the recommendation: <b x-text="(caseData.recommendation||{}).label"></b><span class="faint" x-show="(caseData.recommendation||{}).option==='FLAG'"> - a Flag cannot be approved as an action</span></span></label>
@@ -193,7 +194,7 @@
             <textarea x-model="form.reason" placeholder="Reason"></textarea><div class="row"><button class="btn primary" @click="decide()">Record decision</button>
               <span class="faint">Final: approve → APPROVED, release as-is / cancel → REJECTED. The decision seals the case; nothing is executed.</span></div></div>
         </div></div>
-        <div class="card" x-show="!caseData.allowed_actions.length && ['NEW','RETRIEVING','RECONCILING','RECOMMENDING','TRIAGE','AWAITING_DRI'].includes(caseData.state)"><div class="empty" x-text="['NEW','RETRIEVING','RECONCILING','RECOMMENDING'].includes(caseData.state) ? 'Agents are working on this case…' : 'Waiting on ' + ({TRIAGE:'Maya (CSR) to confirm triage',AWAITING_DRI:'Daniel (DRI) for the final decision'})[caseData.state] + '.'"></div></div>
+        <div class="card" x-show="!caseData.allowed_actions.length && ['NEW','RETRIEVING','RECONCILING','RECOMMENDING','TRIAGE','AWAITING_DRI'].includes(caseData.state)"><div class="empty" x-text="caseData.agent_error ? 'Stopped by a guardrail - waiting on Maya (CSR) to re-run the agents.' : ['NEW','RETRIEVING','RECONCILING','RECOMMENDING'].includes(caseData.state) ? 'Agents are working on this case…' : 'Waiting on ' + ({TRIAGE:'Maya (CSR) to confirm triage',AWAITING_DRI:'Daniel (DRI) for the final decision'})[caseData.state] + '.'"></div></div>
         <div class="card" x-show="caseData.seal"><div class="card-body">Sealed at the decision by <b x-text="caseData.seal && uname(caseData.seal.by)"></b> · case hash <span class="mono" x-text="caseData.seal && caseData.seal.case_hash"></span> · <span x-text="caseData.seal ? caseData.seal.audit_events + ' audit events, ' + caseData.seal.facts + ' facts' : ''"></span></div></div>
 
         <div class="grid2">
@@ -240,7 +241,7 @@
         <section class="kpis"><div class="kpi emph"><div class="l">Total credit owed</div><div class="v" x-text="money(data.total_credit)"></div><div class="s" x-text="data.findings.filter(f=>f.credit>0).length + ' finding(s)'"></div></div>
           <div class="kpi"><div class="l">Unmatched (potential if linked)</div><div class="v" x-text="money(data.unmatched.reduce((s,u)=>s+u.exposure,0))"></div><div class="s" x-text="data.unmatched.length + ' disconnect(s)'"></div></div></section>
         <div class="card"><div class="card-head"><h3>Findings</h3></div><div class="table-wrap"><table class="grid"><tr><th>Account</th><th>Customer</th><th>Severity</th><th>Work order</th><th class="r">Phantom kWh</th><th class="r">Credit</th><th>Bills</th><th>Workflow</th></tr>
-          <template x-for="f in data.findings" :key="f.wo_id"><tr><td class="mono" x-text="f.account_id"></td><td><span x-text="f.customer_name"></span><span class="code" x-show="code(f.account_id)" x-text="code(f.account_id)"></span></td>
+          <template x-for="f in data.findings" :key="f.wo_id"><tr><td class="mono" x-text="f.account_id"></td><td><span x-text="f.customer_name"></span></td>
             <td><span class="badge" :class="f.severity==='HIGH' ? 'bad' : f.severity==='REVIEW' ? '' : 'warn'" x-text="f.severity"></span><div class="faint" x-show="f.severity==='REVIEW'" x-text="f.unbilled_kwh + ' kWh actual after disconnect, unbilled'"></div></td>
             <td class="mono" x-text="f.wo_id + ' ' + f.subtype"></td><td class="r" x-text="f.phantom_kwh"></td><td class="r"><b x-text="money(f.credit)"></b></td><td class="mono" x-text="f.bills.filter(b=>b.credit>0).map(b=>b.bill_id).join(', ')"></td>
             <td><template x-if="f.workflow && f.workflow.case_id"><a :href="'#/case/' + f.workflow.case_id" class="mono" x-text="f.workflow.case_id"></a></template>
@@ -256,7 +257,7 @@
       <div><div class="page-head"><div><h2>Daily check</h2><p>Completed disconnects (not NONPAY) whose SA is still ACTIVE at 23:59 on the as-of date - point-in-time view</p></div>
         <div class="row" style="margin:0"><input type="date" class="input" x-model="dailyAsOf"><button class="btn" @click="load(false)">Run</button></div></div>
         <div class="card"><div class="table-wrap"><table class="grid"><tr><th>Account</th><th>Customer</th><th>Work order</th><th>Disconnected</th><th>Integration</th><th>Open To Do</th></tr>
-          <template x-for="h in data.holds" :key="h.wo_id"><tr><td class="mono" x-text="h.account_id"></td><td><span x-text="h.customer_name"></span><span class="code" x-show="code(h.account_id)" x-text="code(h.account_id)"></span></td><td class="mono" x-text="h.wo_id + ' ' + h.subtype"></td><td x-text="h.disconnect_at"></td><td class="mono" x-text="(h.msg.msg_id||'—') + ' ' + (h.msg.status||'')"></td><td class="mono" x-text="h.todos.join(', ')||'—'"></td></tr></template></table>
+          <template x-for="h in data.holds" :key="h.wo_id"><tr><td class="mono" x-text="h.account_id"></td><td><span x-text="h.customer_name"></span></td><td class="mono" x-text="h.wo_id + ' ' + h.subtype"></td><td x-text="h.disconnect_at"></td><td class="mono" x-text="(h.msg.msg_id||'—') + ' ' + (h.msg.status||'')"></td><td class="mono" x-text="h.todos.join(', ')||'—'"></td></tr></template></table>
           <div class="empty" x-show="!data.holds.length">No holds as of this date.</div></div>
           <div class="card-foot" x-text="'Unmatched: ' + (data.unmatched.map(u=>u.wo_id + ' ' + u.premise + ' → ' + (u.suggestion||'?')).join(', ')||'none') + ' · excluded as non-pay: ' + (data.excluded_nonpay.join(', ')||'none')"></div></div></div>
     </template>

@@ -8,6 +8,8 @@ utilico/.venv/
 utilico/models/
 utilico/state/
 utilico/.pytest_cache/
+# AI-Utilico: local model settings with the API key (template: utilico/.env.example)
+utilico/.env
 
 # Python
 __pycache__/

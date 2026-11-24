@@ -98,14 +98,14 @@ def run_rules(view, ctx, rules_cfg):
     st = msg["status"] if msg else None
     pb2 = msg is not None and st in rules_cfg["prebill"]["PB2"]["statuses"]
     out["PB2"] = {"fired": pb2, "details": [{"msg_id": msg["msg_id"], "status": st, "error_message": msg.get("error_message", "")}] if msg else [],
-                  "records": [msg["msg_id"]] if msg else []}
+                  "records": [ctx["wo_id"], msg["msg_id"]] if msg else []}
 
     # PB3: unmatched OMS premise with a near match in the crosswalk
     pb3 = []
     if ctx["recorded_premise"] not in view.xw:
         for c in near_matches(view, ctx["recorded_premise"], rules_cfg["prebill"]["PB3"]["max_distance"]):
             pb3.append({"recorded": ctx["recorded_premise"], "suggested": c["premise"], "distance": c["distance"]})
-    out["PB3"] = {"fired": bool(pb3), "details": pb3, "records": [ctx["wo_id"]]}
+    out["PB3"] = {"fired": bool(pb3), "details": pb3, "records": [ctx["wo_id"]], "near_matches": [x["suggested"] for x in pb3]}
     for v in out.values():
         v["rule_set_version"] = RULE_SET_VERSION
     return out

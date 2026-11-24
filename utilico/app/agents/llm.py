@@ -119,7 +119,10 @@ class OpenAICompatibleLLMClient(LLMClient):
         converted = [{"role": "system", "content": system_prompt}]
         for message in messages:
             role = message["role"]
-            if role == "assistant":
+            if role == "assistant" and not message.get("tool_calls"):
+                # an earlier final answer the server rejected (sent back once for repair)
+                converted.append({"role": "assistant", "content": self._content(message.get("content") or {})})
+            elif role == "assistant":
                 converted.append({"role": "assistant", "content": None, "tool_calls": [
                     {"id": c["id"], "type": "function",
                      "function": {"name": c["name"], "arguments": self._content(c.get("input") or {})}}
