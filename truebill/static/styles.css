@@ -138,8 +138,6 @@ table.grid tr.ov td{background:var(--med-bg)}
 .avatar{width:32px;height:32px;border-radius:50%;background:var(--accent-soft);color:var(--link);display:inline-grid;place-items:center;font-weight:800;font-size:12px}
 .toast{position:fixed;right:18px;bottom:18px;z-index:50;background:var(--text);color:var(--bg);padding:9px 14px;border-radius:9px;max-width:460px;box-shadow:var(--shadow)}
 .toast.err{background:var(--high);color:#fff}
-.guide{position:fixed;right:16px;top:130px;width:330px;z-index:30;background:var(--surface);border:2px solid var(--agent);border-radius:12px;box-shadow:var(--shadow);padding:12px}
-.guide ol{padding-left:18px;margin:6px 0;font-size:12.5px}.guide li{margin-bottom:5px;color:var(--faint)}.guide li.on{color:var(--text);font-weight:600}.guide li.done{color:var(--muted)}
 .empty{padding:22px;text-align:center;color:var(--muted)}
 .res{font-weight:700}.res.pass{color:var(--pass)}.res.fail{color:var(--high)}
 details summary{cursor:pointer}

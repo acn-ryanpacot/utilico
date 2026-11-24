@@ -18,17 +18,6 @@ from .sandbox import Sandbox
 from .util import STATE_DIR, AppError, NotFound, now_utc, read_json, sha256_text, write_json_atomic
 from .workflow import CaseMixin
 
-GUIDE = [
-    ("Jump to 4 Nov 09:40. The Harbourline dispute (CASE-300276) arrives and the Orchestrator opens a REMEDIATE case.", "jump", "2026-11-04 09:40"),
-    ("Agent activity streams: five retrieval lanes in parallel, then reconciliation. The packet is ready with R1-R4 all fired.", "agents", None),
-    ("Maya (CSR) checks the evidence and customer contact and confirms triage.", "act", ["TRIAGE"]),
-    ("Daniel (DRI) approves Prorate - the $1,436.50 credit. His decision is final: the case is APPROVED and sealed.", "act", ["AWAITING_DRI"]),
-    ("Jump to 9 Nov 15:30. The regulatory complaint opens a linked REGULATORY_RESPONSE case; R4 is now High (period 2026-10 closed on 6 Nov).", "jump", "2026-11-09 15:30"),
-    ("The agents re-assemble the packet from the sealed case; Maya confirms triage and Daniel approves the response - sealed.", "act", ["TRIAGE", "AWAITING_DRI"]),
-    ("The KPI tiles update: detection, citations, packet time and the Day-30 gate.", "done", None),
-]
-
-
 STATE_VERSION = 3          # 3 = process ends at the DRI's decision; CSR account lookup
 
 
@@ -38,7 +27,7 @@ def new_state(ds_id, sc_id, events):
             "toggles": {"followup": True, "stale_mdm": False, "autopilot": False},
             "cases": {}, "case_seq": 0, "lookup_seq": 0, "bills": {}, "unissued": [], "runs": [], "prevented": [], "approved": [],
             "backscan_sent": [], "banner": None,
-            "guide": None, "last_event_real": None}
+            "last_event_real": None}
 
 
 class Session(TimelineMixin, PrebillMixin, CaseMixin):
@@ -50,7 +39,6 @@ class Session(TimelineMixin, PrebillMixin, CaseMixin):
         self.tasks = set()
         self._runner = None
         self._ap_task = None
-        self._guide_task = None
         self._autopilot_flag = False
         self.knowledge = KnowledgeStore(engine.kb, os.path.join(folder, "knowledge") if folder else None)
         self._load()
@@ -89,16 +77,15 @@ class Session(TimelineMixin, PrebillMixin, CaseMixin):
             fh.write(text)
         return p
 
-    def reset(self, user_id, reason="Demo state reset", keep_guide=False):
+    def reset(self, user_id, reason="Demo state reset"):
         for t in list(self.tasks):
             t.cancel()
         self.tasks = set()
         if self._runner:
             self._runner.cancel()
         self._runner = None
-        for t in (self._ap_task,) + (() if keep_guide else (self._guide_task,)):
-            if t:
-                t.cancel()
+        if self._ap_task:
+            self._ap_task.cancel()
         self._ap_task = None
         if self.folder:
             for sub in ("sandbox", "outputs"):
@@ -229,46 +216,6 @@ class Session(TimelineMixin, PrebillMixin, CaseMixin):
                     break
                 self.state["timeline"]["playing"] = True
         await self.wait_idle()
-
-    # ---- guided demo --------------------------------------------------------------------------------------
-    def start_guide(self, user_id):
-        if self.sc_id != "DISPUTE_REPLAY":
-            raise AppError("The guided demo runs on DISPUTE_REPLAY (Dataset A)")
-        if self._guide_task and not self._guide_task.done():
-            raise AppError("The guided demo is already running")
-        self._guide_task = asyncio.get_event_loop().create_task(self._guide(user_id))
-
-    async def _guide(self, user_id):
-        dwell = 0 if self.fast else 4.0
-        self.reset(user_id, "Guided demo started", keep_guide=True)
-        self.state["guide"] = {"step": 0, "lines": [g[0] for g in GUIDE], "running": True}
-        for i, (line, kind, arg) in enumerate(GUIDE):
-            self.state["guide"]["step"] = i + 1
-            self.publish({"type": "session"})
-            if kind == "jump":
-                self.state["timeline"]["pause_for_humans"] = True
-                self.play(user_id, target=arg)
-                await asyncio.sleep(0.1 if not self.fast else 0)
-                while self.state["timeline"]["playing"]:
-                    await asyncio.sleep(0.05 if not self.fast else 0)
-                await self.wait_idle()
-            elif kind == "agents":
-                await self.wait_idle()
-            elif kind == "act":
-                for _ in range(60):
-                    await self.wait_idle()
-                    open_ = [c for c in self.state["cases"].values() if c["state"] in arg]
-                    if not open_:
-                        break
-                    self._autopilot_flag = True
-                    self.autopilot_step()
-                    self._autopilot_flag = False
-                    await asyncio.sleep(0.6 if not self.fast else 0)
-                await self.wait_idle()
-            await asyncio.sleep(dwell)
-        self.state["guide"]["running"] = False
-        self.save()
-        self.publish({"type": "session"})
 
 
 class Engine:

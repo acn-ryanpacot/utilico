@@ -38,7 +38,7 @@ Sign in as Maya (CSR) or Daniel (DRI) — no passwords; "Switch user" in the hea
 | `DISPUTE_REPLAY` (2 → 10 Nov) | As it actually happened: only disputes arrive (Harbourline 4 Nov, regulatory complaint 9 Nov) |
 | `BACKSCAN_2026-11-10` | POC 1 back-scan; the CSR sends findings into the workflow as REMEDIATE cases |
 
-Timeline: Play / Pause / Step, speed (default one scenario-day per second), the scrubber, presets, and "Pause for humans" (default on). Demo tools (Timeline & demo): reset, simulate stale MDM feed, **Autopilot** (each persona's next recommended action, logged with `autopilot=true`) and the **Guided demo** (~3 min on DISPUTE_REPLAY, Dataset A).
+Timeline: Play / Pause / Step, speed (default one scenario-day per second), the scrubber, presets, and "Pause for humans" (default on). Demo tools (Timeline & demo): reset, simulate stale MDM feed, **Autopilot** (each persona's next recommended action, logged with `autopilot=true`).
 
 ## Tests
 

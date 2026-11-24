@@ -71,7 +71,7 @@ class TimelineMixin:
                 "pause_for_humans": tl["pause_for_humans"], "paused_reason": tl.get("paused_reason"), "target": tl.get("target"),
                 "events": [{k: e.get(k) for k in ("event_id", "type", "at", "ref", "label", "status", "scheduled", "case_id")} for e in
                            sorted(self.state["events"], key=lambda e: (e["at"], ORDER[e["type"]]))],
-                "toggles": self.state["toggles"], "banner": self.state.get("banner"), "guide": self.state.get("guide")}
+                "toggles": self.state["toggles"], "banner": self.state.get("banner")}
 
     def waiting_for_humans(self):
         hs = self.cfg.workflow()["human_states"]

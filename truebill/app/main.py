@@ -216,8 +216,6 @@ def create_app(data_dir=None, state_root=STATE_DIR):
             s.set_toggle(u["user_id"], "autopilot", on)
             if on and s.pending_events() and not s.state["timeline"]["playing"]:
                 s.play(u["user_id"], speed=float(b.get("speed") or 4))
-        elif op == "guided":
-            s.start_guide(u["user_id"])
         else:
             raise NotFound("Unknown demo op")
         return {"timeline": s.timeline_view()}

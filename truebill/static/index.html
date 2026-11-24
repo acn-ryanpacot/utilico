@@ -175,7 +175,6 @@
               <span class="faint" x-text="st ? 'MDM lag ' + st.freshness.lags.MDM + ' min (max ' + st.freshness.max_lag_minutes + ')' : ''"></span></div>
             <div class="row"><button class="btn primary" @click="demo('autopilot', {value:true, speed: 4}, 'Autopilot on - each persona\'s next recommended action, logged with autopilot=true')">Autopilot (play to end)</button>
               <button class="btn" @click="demo('autopilot', {value:false}, 'Autopilot off')">Stop autopilot</button></div>
-            <div class="row"><button class="btn primary" :disabled="scId!=='DISPUTE_REPLAY'" @click="demo('guided', {}, 'Guided demo started')">Guided demo (~3 min)</button><span class="faint" x-show="scId!=='DISPUTE_REPLAY'">runs on DISPUTE_REPLAY</span></div>
           </div></div>
         </div>
         <div class="card"><div class="card-head"><h3>Events</h3><span class="muted" x-text="st ? st.timeline.events.length + ' event(s)' : ''"></span></div>
@@ -353,12 +352,7 @@
     </template>
   </main>
 </div>
-
-<!-- guided demo narration -->
-<template x-if="st && st.timeline.guide && st.timeline.guide.lines && !(guideHidden && !st.timeline.guide.running)">
-  <div class="guide"><b>Guided demo</b> <span class="badge agent" x-text="st.timeline.guide.running ? 'step ' + st.timeline.guide.step + '/' + st.timeline.guide.lines.length : 'finished'"></span>
-    <button class="btn sm ghost" style="float:right" x-show="!st.timeline.guide.running" @click="guideHidden = true">×</button>
-    <ol><template x-for="(l, i) in st.timeline.guide.lines" :key="i"><li :class="{on: i+1===st.timeline.guide.step, done: i+1<st.timeline.guide.step}" x-text="l"></li></template></ol></div>
+</ol></div>
 </template>
 </div>
 </template>

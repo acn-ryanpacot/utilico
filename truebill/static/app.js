@@ -26,7 +26,7 @@ function trueBill() {
     auditF: {}, auditVerify: null, selftest: null, selftestRunning: false, explorer: { file: 'oms_work_orders.csv', q: '', page: 0 },
     lookupAcc: '', lookupResult: null, lookupBusy: false,
     knowledgeQ: 'Commercial disconnect not synced; full cycle billed', knowledgeColl: 'case_history', dailyAsOf: '2026-11-02',
-    form: {}, sse: null, sseOn: false, refreshTimer: null, busy: false, theme: 'auto', guideHidden: false,
+    form: {}, sse: null, sseOn: false, refreshTimer: null, busy: false, theme: 'auto',
     LIFECYCLE, LANES, RULE_NAMES, PERSONA, money, pct, hhmm,
 
     async init() {
@@ -140,7 +140,7 @@ function trueBill() {
 
     // ---- timeline / demo ------------------------------------------------------------------------------------
     async tl(op, body) { try { const r = await this.api('/api/timeline/' + op, { method: 'POST', body: body || {} }); if (r.timeline && this.st) this.st.timeline = r.timeline; this.scheduleRefresh(); } catch (e) { this.toast(e.message, true); } },
-    async demo(op, body, msg) { if (op === 'guided') this.guideHidden = false; try { const r = await this.api('/api/demo/' + op, { method: 'POST', body: body || {} }); if (msg) this.toast(msg); this.scheduleRefresh(); return r; } catch (e) { this.toast(e.message, true); } },
+    async demo(op, body, msg) { try { const r = await this.api('/api/demo/' + op, { method: 'POST', body: body || {} }); if (msg) this.toast(msg); this.scheduleRefresh(); return r; } catch (e) { this.toast(e.message, true); } },
     toggle(name, value) { this.tl('toggle', { name, value }); },
     scrubX(at) {
       const t = this.st.timeline; const a = Date.parse(t.start.replace(' ', 'T')), b = Date.parse(t.end.replace(' ', 'T'));
