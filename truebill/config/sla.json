@@ -1,0 +1,11 @@
+{
+  "_comment": "Simplified SLAs (prompt §9): clock hours, real time from case open. Display and KPI flags only - no auto-escalation, no business hours.",
+  "targets_hours": {
+    "P1": {"first_action": 1, "resolve": 24},
+    "P2": {"first_action": 4, "resolve": 48},
+    "P3": {"first_action": 24, "resolve": 120},
+    "P4": {"first_action": 48, "resolve": 240}
+  },
+  "at_risk_pct": 0.75,
+  "breached_pct": 1.0
+}

@@ -1,0 +1,38 @@
+{
+  "_comment": "Simulated sign-in (no passwords). Personas and the permission matrix (AI-TrueBILL prompt §2). V = view, A = act, - = hidden. The server enforces all of it.",
+  "users": [
+    {"user_id": "u.csr", "name": "Maya Chen", "persona": "CSR", "title": "CSR / Billing Operations",
+     "rights": "Receives disputes and new cases; confirms triage and ID matches (evidence only); releases held bills; sends approved customer summaries; sends back-scan findings into the workflow. No decision or approval rights."},
+    {"user_id": "u.dri", "name": "Daniel Okoro", "persona": "DRI", "title": "DRI – Billing Exceptions Lead",
+     "rights": "The single decision point. Approves or overrides recommendations, approves execution plans, approves all outputs including regulatory content, and closes and seals cases."},
+    {"user_id": "u.finance", "name": "Aisha Rahman", "persona": "FINANCE", "title": "Finance Controller",
+     "rights": "Approves reversals of revenue already posted to the GL (REMEDIATE credits). Nothing else."}
+  ],
+  "actors": {
+    "agent.orchestrator": {"name": "Orchestrator agent", "type": "AGENT"},
+    "agent.retrieval": {"name": "Data Retrieval agent", "type": "AGENT"},
+    "agent.reconciliation": {"name": "Reconciliation agent", "type": "AGENT"},
+    "agent.recommendation": {"name": "Recommendation agent", "type": "AGENT"},
+    "agent.execution": {"name": "Execution agent", "type": "AGENT"},
+    "agent.communications": {"name": "Communications agent", "type": "AGENT"},
+    "sys.prebill": {"name": "Pre-bill check / bill-run simulator", "type": "SYSTEM"},
+    "sys.verifier": {"name": "Verifier", "type": "SYSTEM"},
+    "sys.cli": {"name": "System (command line)", "type": "SYSTEM"},
+    "sys.guard": {"name": "Offline guard", "type": "SYSTEM"}
+  },
+  "screens": {
+    "dashboard":  {"label": "Dashboard",                 "CSR": "V", "DRI": "V", "FINANCE": "V"},
+    "mywork":     {"label": "My Work",                   "CSR": "A", "DRI": "A", "FINANCE": "A"},
+    "timeline":   {"label": "Timeline & demo",           "CSR": "A", "DRI": "A", "FINANCE": "A"},
+    "cases":      {"label": "Cases",                     "CSR": "V", "DRI": "A", "FINANCE": "V"},
+    "case":       {"label": "Case detail",               "CSR": "A", "DRI": "A", "FINANCE": "A"},
+    "finance":    {"label": "Finance approvals",         "CSR": "-", "DRI": "V", "FINANCE": "A"},
+    "outputs":    {"label": "Output approval",           "CSR": "-", "DRI": "A", "FINANCE": "-"},
+    "backscan":   {"label": "Back-scan",                 "CSR": "A", "DRI": "V", "FINANCE": "V"},
+    "daily":      {"label": "Daily check",               "CSR": "V", "DRI": "V", "FINANCE": "V"},
+    "explorer":   {"label": "Data Explorer",             "CSR": "V", "DRI": "V", "FINANCE": "V"},
+    "knowledge":  {"label": "Knowledge",                 "CSR": "V", "DRI": "V", "FINANCE": "V"},
+    "audit":      {"label": "Audit log",                 "CSR": "V", "DRI": "V", "FINANCE": "V"},
+    "selftest":   {"label": "Self-test",                 "CSR": "V", "DRI": "V", "FINANCE": "V"}
+  }
+}

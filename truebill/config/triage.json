@@ -1,0 +1,6 @@
+{
+  "_comment": "Green / Amber / Red triage (prompt §9). Measured, not acting: computed when the case reaches AWAITING_DRI.",
+  "red": {"amount_min": 1000.00, "on_dispute_or_regulatory_flag": true, "on_pb3": true, "on_flag_recommendation": true},
+  "green": {"amount_max_exclusive": 50.00, "confidence_min": 0.70},
+  "priority": {"impact_high_min": 1000.00, "impact_medium_min": 250.00, "bills_modifier_min": 3}
+}

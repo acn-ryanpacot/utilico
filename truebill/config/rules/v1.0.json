@@ -1,0 +1,44 @@
+{
+  "rule_set_version": "v1.0",
+  "_comment": "Rule catalogue (prompt §8). Rules are deterministic code in app/rules.py, parameterised from this file.",
+  "disconnect_window": "The disconnect day is billable. Post-disconnect days run from disconnect date + 1 until the day before the next COMPLETED RECONNECT on the same premise, or open-ended if none.",
+  "stop_subtypes": ["STOP_SERVICE", "MOVE_OUT"],
+  "nonpay_subtypes": ["NONPAY"],
+  "reconciliation": {
+    "R1": {"name": "Billed after disconnect", "systems": "OMS ↔ CC&B", "fires_when": "A draft or issued bill covers post-disconnect days"},
+    "R2": {"name": "Estimated reads after disconnect", "systems": "MDM ↔ OMS", "fires_when": "Post-disconnect days within an affected bill carry ESTIMATED reads"},
+    "R3": {"name": "Complaint without billing hold", "systems": "CRM ↔ CC&B", "fires_when": "A CRM case in a complaint category, opened on or after the disconnect date, with billing_hold_set = N",
+           "categories": ["BILLING_ENQUIRY", "BILLING_DISPUTE", "REGULATORY_COMPLAINT"]},
+    "R4": {"name": "Disputed revenue posted", "systems": "GL ↔ Customer Care", "fires_when": "An affected bill is DISPUTED or has an open BILLING_DISPUTE case, and its GL journal is posted. High if the period is CLOSED at scenario time, else Medium."}
+  },
+  "prebill": {
+    "PB1": {"name": "SA active despite stop", "fires_when": "The SA is ACTIVE at scenario time despite a STOP_SERVICE or MOVE_OUT disconnect"},
+    "PB2": {"name": "Integration message failed", "fires_when": "The disconnect's integration message is ERROR, SKIPPED or UNPROCESSED at scenario time", "statuses": ["ERROR", "SKIPPED", "UNPROCESSED"]},
+    "PB3": {"name": "ID near-match", "fires_when": "An OMS premise has no crosswalk match, but a crosswalk premise is within Levenshtein distance 1 (O/0 and I/1 equal)", "max_distance": 1}
+  },
+  "blocking_rules": ["R1", "R2", "PB3"],
+  "causes": [
+    {"code": "C1", "label": "No integration mapping", "condition": "Integration SKIPPED", "s_codes": ["S3"]},
+    {"code": "C3", "label": "ID mismatch", "condition": "Integration ERROR mentioning the cross-reference", "s_codes": ["S3", "S1"]},
+    {"code": "C2", "label": "Integration failure", "condition": "Integration ERROR with an open To Do", "s_codes": ["S3", "S1"]},
+    {"code": "C6", "label": "Bill ran before stop processed", "condition": "Message UNPROCESSED at scenario time, or processed after the affected bill run", "s_codes": ["S1"]},
+    {"code": "C4+C5", "label": "Non-pay window estimated", "condition": "NONPAY disconnect with estimated post-disconnect days", "s_codes": ["S2"]}
+  ],
+  "s_codes": {
+    "S1": "CC&B pre-bill check",
+    "S2": "MDM read types and estimates tied to premise status",
+    "S3": "OMS disconnect events",
+    "S4": "CRM complaint categories that trigger holds",
+    "S5": "GL disputed-revenue status"
+  },
+  "s_code_additions": {"R3": "S4", "R4": "S5"},
+  "mock_policy": {
+    "crm_signal_phrases": ["disconnect", "no further charges", "moved", "returned", "dispute"],
+    "confidence_base": 0.60,
+    "confidence_step": 0.10,
+    "confidence_cap": 0.95,
+    "pb3_corroboration_days": 2
+  },
+  "followup_hours": 24,
+  "dispute_categories": ["BILLING_DISPUTE", "REGULATORY_COMPLAINT"]
+}

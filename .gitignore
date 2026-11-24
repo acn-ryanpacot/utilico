@@ -3,6 +3,12 @@ poc1/state/
 # Pre-v2.0 state archived by the migration (never deleted by the app)
 poc1/state_archive/
 
+# AI-TrueBILL: virtual env, downloaded model files, runtime state (all recreated by scripts/setup.py / run.py)
+truebill/.venv/
+truebill/models/
+truebill/state/
+truebill/.pytest_cache/
+
 # Python
 __pycache__/
 *.pyc

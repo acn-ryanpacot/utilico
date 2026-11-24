@@ -1,0 +1,6 @@
+{
+  "_comment": "Maximum connector lag allowed before a bill run (prompt §6). The demo toggle 'Simulate stale MDM feed' sets the MDM lag to stale_demo_minutes.",
+  "max_lag_minutes": 15,
+  "stale_demo_minutes": 360,
+  "connectors": ["CCB", "MDM", "OMS", "CRM", "GL", "INTEGRATION", "CROSSWALK"]
+}

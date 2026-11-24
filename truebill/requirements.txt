@@ -1,0 +1,13 @@
+# AI-TrueBILL - exact pins (releases at least two weeks old on 2026-11-24).
+# The full resolved set, including transitive dependencies, is written to requirements.lock.txt by scripts/setup.py.
+fastapi==0.162.2
+starlette==1.10.0
+uvicorn==0.54.0
+pydantic==2.14.3
+pydantic-core==2.50.4
+chromadb==1.5.9
+onnxruntime==1.31.1
+tokenizers==0.23.3
+numpy==2.5.4
+pytest==9.2.0
+httpx==0.28.1

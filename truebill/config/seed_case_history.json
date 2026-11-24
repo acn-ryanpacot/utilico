@@ -1,0 +1,15 @@
+{
+  "_comment": "Fictional closed cases seeding the knowledge store's case_history collection (prompt §14). Context only - never changes confidence or the option.",
+  "cases": [
+    {"id": "HC-001", "closed": "2025-09-14", "segment": "Residential", "pattern": "Move-out billed 2 cycles on estimates", "cause": "C1", "resolution": "Prorate + credit", "amount": 212.40, "manual_days": 4},
+    {"id": "HC-002", "closed": "2025-10-03", "segment": "Commercial", "pattern": "Disconnect not synced; full cycle billed", "cause": "C2", "resolution": "Prorate + credit; regulator enquiry", "amount": 1980.15, "manual_days": 5},
+    {"id": "HC-003", "closed": "2025-11-21", "segment": "Residential", "pattern": "Non-pay window billed on estimates", "cause": "C4+C5", "resolution": "Suppress", "amount": 38.22, "manual_days": 2},
+    {"id": "HC-004", "closed": "2025-12-09", "segment": "Commercial", "pattern": "Typo in OMS premise ID", "cause": "C3", "resolution": "Data fix + prorate", "amount": 640.00, "manual_days": 7},
+    {"id": "HC-005", "closed": "2026-01-15", "segment": "Residential", "pattern": "Bill ran before stop processed (outage)", "cause": "C6", "resolution": "Prorate", "amount": 19.85, "manual_days": 3},
+    {"id": "HC-006", "closed": "2026-02-02", "segment": "Commercial", "pattern": "Complaint logged before bill, no hold", "cause": "C2 + R3", "resolution": "Prorate + credit", "amount": 1120.70, "manual_days": 6},
+    {"id": "HC-007", "closed": "2026-03-18", "segment": "Residential", "pattern": "Move-out mapping gap, 3 cycles", "cause": "C1", "resolution": "Credit; formal complaint", "amount": 455.10, "manual_days": 9},
+    {"id": "HC-008", "closed": "2026-04-27", "segment": "Commercial", "pattern": "Disputed revenue in closed period", "cause": "R4", "resolution": "Credit memo + regulatory note", "amount": 2310.00, "manual_days": 8},
+    {"id": "HC-009", "closed": "2026-05-30", "segment": "Residential", "pattern": "Reconnected same day", "cause": "none", "resolution": "Cancelled as false positive", "amount": 0.00, "manual_days": 1},
+    {"id": "HC-010", "closed": "2026-06-22", "segment": "Commercial", "pattern": "Timing race during CC&B maintenance", "cause": "C6", "resolution": "Prorate", "amount": 96.40, "manual_days": 2}
+  ]
+}

@@ -1,0 +1,1 @@
+{"mode": "mock", "step_latency_ms": 250, "show_agent_activity": true, "max_tool_calls": 12}

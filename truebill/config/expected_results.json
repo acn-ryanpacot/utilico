@@ -1,0 +1,75 @@
+{
+  "_comment": "Expected results (AI-TrueBILL prompt §19). Case codes E1..E7 map to accounts via answer_key.csv customer_name. Amounts: Decimal ROUND_HALF_UP; tolerance ±$0.01 for bills and credits, ±$0.02 for projections. rules = rules fired when the packet first reached TRIAGE; rules_final = after a confirmed ID match re-ran the agents.",
+  "tolerance": {"money": 0.01, "projection": 0.02},
+  "never_cases": ["E6", "N1", "N2", "N3", "N4", "N5"],
+  "backscan_totals": {"dataset_A_with_errors": {"total": 1992.59, "unmatched": 877.50, "E6_review_kwh": 645},
+                      "dataset_B_two_errors_corrected": {"total": 1489.42, "unmatched": 877.50, "E6_review_kwh": 645}},
+  "daily_holds_2026_11_02": {"dataset_A_with_errors": ["E1", "E2", "E5", "E7"], "dataset_B_two_errors_corrected": ["E1", "E7"]},
+  "scenarios": {
+    "dataset_A_with_errors": {
+      "PREVENTION_REPLAY": {
+        "followup_on": {
+          "prevented": 2870.09, "held": 1,
+          "prevented_by_case": {"E2": 488.87, "E3": 877.50, "E4": 52.92, "E1": 1436.50, "E5": 14.30},
+          "jira_order": ["E2", "E3", "E4", "E1", "E5", "E7"],
+          "bill_effects": {
+            "BL-4400214-202608": ["REGENERATED", 190.28, 60.70], "BL-4400214-202609": ["SUPPRESSED", 176.70, 0.00],
+            "BL-4400417-202609": ["REGENERATED", 1373.26, 1193.26], "BL-4400322-202609": ["HELD", 161.60, 108.68],
+            "BL-4400214-202610": ["SUPPRESSED", 182.59, 0.00], "BL-4400417-202610": ["SUPPRESSED", 697.50, 0.00],
+            "BL-4400101-202610": ["REGENERATED", 2574.96, 1138.46], "BL-4400388-202610": ["REGENERATED", 194.43, 180.13]},
+          "cases": [
+            {"case": "E2", "opened": "2026-08-10 16:05", "type": "ADVANCE", "rules": ["PB1", "PB2"], "cause": "C1", "option": "PRORATE", "amount": 145.35, "amount_kind": "projected_exposure", "priority": "P4", "triage": "Amber", "confidence": 0.70, "must_cite": ["WO-104249", "MSG-550021"]},
+            {"case": "E3", "opened": "2026-09-23 13:10", "type": "ADVANCE", "rules": ["PB2", "PB3"], "cause": "C3", "option_initial": "FLAG", "option": "PRORATE", "amount": 472.70, "amount_kind": "projected_exposure", "priority": "P3", "triage": "Red", "confidence": 0.70, "must_cite": ["WO-104256", "MSG-550024"], "no_pb3_corroboration": true},
+            {"case": "E4", "opened": "2026-10-02 01:00", "type": "PREVENT", "rules": ["R1", "R2"], "cause": "C4+C5", "option": "SUPPRESS", "amount": 52.92, "before": 161.60, "after": 108.68, "priority": "P3", "triage": "Amber", "confidence": 0.80, "must_cite": ["WO-104263", "WO-104270"]},
+            {"case": "E1", "opened": "2026-10-15 10:42", "type": "ADVANCE", "rules": ["PB1", "PB2"], "cause": "C2", "option": "PRORATE", "amount": 1406.36, "amount_kind": "projected_exposure", "priority": "P2", "triage": "Red", "confidence": 0.80, "must_cite": ["WO-104242", "MSG-550018", "TD-7701"], "must_not_cite": ["CASE-300265"]},
+            {"case": "E5", "opened": "2026-10-30 18:40", "type": "ADVANCE", "rules": ["PB1", "PB2"], "cause": "C6", "option": "PRORATE", "amount": 12.32, "amount_kind": "projected_exposure", "priority": "P4", "triage": "Green", "confidence": 0.70, "must_cite": ["WO-104277", "MSG-550033"], "msg_status": {"MSG-550033": "UNPROCESSED"}},
+            {"case": "E7", "opened": "2026-11-02 01:00", "type": "ADVANCE", "rules": ["PB1", "PB2"], "cause": "C2", "option": "PRORATE", "label_contains": "stop effective 2026-11-01", "amount": 1553.84, "amount_kind": "projected_exposure", "priority": "P2", "triage": "Red", "confidence": 0.80, "must_cite": ["WO-104291", "MSG-550039", "TD-7702"]}
+          ]
+        },
+        "followup_off": {
+          "prevented": 2870.09, "held": 5,
+          "cases": [
+            {"case": "E2", "opened": "2026-09-02 01:00", "type": "PREVENT", "rules": ["R1", "R2", "PB1", "PB2"], "cause": "C1", "option": "PRORATE", "amount": 129.58, "before": 190.28, "after": 60.70, "priority": "P3", "triage": "Amber", "confidence": 0.80},
+            {"case": "E3", "opened": "2026-10-02 01:00", "type": "PREVENT", "rules": ["PB2", "PB3"], "rules_final": ["R1", "R2", "PB2", "PB3"], "cause": "C3", "option_initial": "FLAG", "option": "PRORATE", "amount": 180.00, "before": 1373.26, "after": 1193.26, "priority": "P3", "triage": "Red", "confidence": 0.80},
+            {"case": "E4", "opened": "2026-10-02 01:00", "type": "PREVENT", "rules": ["R1", "R2"], "cause": "C4+C5", "option": "SUPPRESS", "amount": 52.92, "before": 161.60, "after": 108.68, "priority": "P3", "triage": "Amber", "confidence": 0.80},
+            {"case": "E1", "opened": "2026-11-02 01:00", "type": "PREVENT", "rules": ["R1", "R2", "R3", "PB1", "PB2"], "cause": "C2", "option": "PRORATE", "amount": 1436.50, "before": 2574.96, "after": 1138.46, "priority": "P1", "triage": "Red", "confidence": 0.95, "must_cite": ["CASE-300265"]},
+            {"case": "E5", "opened": "2026-11-02 01:00", "type": "PREVENT", "rules": ["R1", "R2", "PB1", "PB2"], "cause": "C6", "option": "PRORATE", "amount": 14.30, "before": 194.43, "after": 180.13, "priority": "P3", "triage": "Green", "confidence": 0.80},
+            {"case": "E7", "opened": "2026-11-02 01:00", "type": "ADVANCE", "rules": ["PB1", "PB2"], "cause": "C2", "option": "PRORATE", "amount": 1553.84, "amount_kind": "projected_exposure", "priority": "P2", "triage": "Red", "confidence": 0.80}
+          ]
+        }
+      },
+      "DISPUTE_REPLAY": {
+        "default": {
+          "cases": [
+            {"case": "E1", "opened": "2026-11-04 09:40", "type": "REMEDIATE", "rules": ["R1", "R2", "R3", "R4", "PB1", "PB2"], "r4": "Medium", "cause": "C2", "s_codes": ["S3", "S1", "S4", "S5"], "option": "PRORATE", "amount": 1436.50, "credit_period": "2026-11", "priority": "P1", "triage": "Red", "confidence": 0.95, "finance": true, "jira": "BILL-NEW-1147",
+             "must_cite": ["WO-104242", "MSG-550018", "TD-7701", "CASE-300265", "CASE-300276", "BL-4400101-202610", "JE-4400101-202610"],
+             "outputs": ["customer_summary", "executive_brief", "jira_ticket"], "no_outputs": ["regulator_response"],
+             "jira_title": "Implement OMS disconnect event as billing suppression trigger in CC&B"},
+            {"case": "E1", "opened": "2026-11-09 15:30", "type": "REGULATORY_RESPONSE", "linked": true, "r4": "High", "priority": "P1", "triage": "Red", "option": "RESPOND",
+             "must_cite": ["CASE-300287"], "outputs": ["regulator_response"], "no_outputs": ["customer_summary", "executive_brief", "jira_ticket"]}
+          ]
+        }
+      },
+      "BACKSCAN_2026-11-10": {
+        "default": {
+          "remediated": 2870.09, "send_disabled": ["E6"],
+          "cases": [
+            {"case": "E1", "type": "REMEDIATE", "rules": ["R1", "R2", "R3", "R4", "PB1", "PB2"], "r4": "High", "amount": 1436.50, "priority": "P1", "triage": "Red", "confidence": 0.95, "outputs": ["regulator_response"], "finance": true},
+            {"case": "E2", "type": "REMEDIATE", "rules": ["R1", "R2", "PB1", "PB2"], "amount": 488.87, "priority": "P2", "triage": "Amber", "confidence": 0.90, "bills": 3, "finance": true},
+            {"case": "E3", "type": "REMEDIATE", "rules": ["PB2", "PB3"], "rules_final": ["R1", "R2", "PB2", "PB3"], "amount": 877.50, "priority": "P3", "triage": "Red", "confidence": 0.80, "finance": true},
+            {"case": "E4", "type": "REMEDIATE", "rules": ["R1", "R2"], "amount": 52.92, "priority": "P4", "triage": "Amber", "confidence": 0.80, "finance": true},
+            {"case": "E5", "type": "REMEDIATE", "rules": ["R1", "R2"], "cause": "C6", "amount": 14.30, "priority": "P4", "triage": "Green", "confidence": 0.80, "finance": true}
+          ]
+        }
+      }
+    },
+    "dataset_B_two_errors_corrected": {
+      "PREVENTION_REPLAY": {
+        "followup_on": {"prevented": 2366.92, "held": 1, "cases_from": ["dataset_A_with_errors", "PREVENTION_REPLAY", "followup_on"], "only": ["E3", "E4", "E1", "E7"]},
+        "followup_off": {"prevented": 2366.92, "held": 3, "cases_from": ["dataset_A_with_errors", "PREVENTION_REPLAY", "followup_off"], "only": ["E3", "E4", "E1", "E7"]}
+      },
+      "DISPUTE_REPLAY": {"default": {"cases_from": ["dataset_A_with_errors", "DISPUTE_REPLAY", "default"]}},
+      "BACKSCAN_2026-11-10": {"default": {"remediated": 2366.92, "send_disabled": ["E6"], "cases_from": ["dataset_A_with_errors", "BACKSCAN_2026-11-10", "default"], "only": ["E1", "E3", "E4"]}}
+    }
+  }
+}
