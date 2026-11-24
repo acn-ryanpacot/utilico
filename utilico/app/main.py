@@ -31,8 +31,8 @@ class Body(BaseModel):
 
 
 class AppState:
-    def __init__(self, data_dir, state_root):
-        self.cfg = Config()
+    def __init__(self, data_dir, state_root, cfg=None):
+        self.cfg = cfg or Config()
         self.data_dir = data_dir
         self.registry = Registry(data_dir)
         self.kb = KnowledgeBase(self.cfg)
@@ -45,9 +45,9 @@ class AppState:
                                                          after={"host": host, "port": port}, reason="Outbound connection blocked (OFFLINE_GUARD=1)"))
 
 
-def create_app(data_dir=None, state_root=STATE_DIR):
+def create_app(data_dir=None, state_root=STATE_DIR, cfg=None):
     app = FastAPI(title="AI-Utilico", docs_url=None, redoc_url=None, openapi_url=None)
-    st = AppState(data_dir or os.environ.get("UTILICO_DATA_DIR") or DEFAULT_DATA_DIR, state_root)
+    st = AppState(data_dir or os.environ.get("UTILICO_DATA_DIR") or DEFAULT_DATA_DIR, state_root, cfg)
     app.state.tb = st
     cfg, eng = st.cfg, st.engine
 
@@ -83,7 +83,9 @@ def create_app(data_dir=None, state_root=STATE_DIR):
     # ---- session / context ----------------------------------------------------------------------------
     @app.get("/api/users")
     async def users():
-        return {"users": cfg.users(), "agent": {"label": "Agent: %s (scripted)" % cfg.agent()["mode"], "mode": cfg.agent()["mode"]},
+        mode = eng.llm.mode
+        label = "Agent: mock (scripted)" if mode == "mock" else "Agent: %s (live)" % mode
+        return {"users": cfg.users(), "agent": {"label": label, "mode": mode},
                 "knowledge": {"mode": st.kb.mode, "error": st.kb.error}}
 
     @app.post("/api/session/sign_in")

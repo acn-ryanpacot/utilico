@@ -220,8 +220,15 @@ class CaseMixin:
             if not rerun:
                 self.transition(case, "RETRIEVING", "agent.orchestrator", after={"lanes": list(LANES)})
             started = now_utc()
-            runs = await asyncio.gather(*[run_agent(self, case, "agent.retrieval", self.brief(case, lane=lane), self.lane_tools(lane), RetrievalOut, lane=lane)
-                                          for lane in LANES])
+            tasks = [asyncio.create_task(run_agent(self, case, "agent.retrieval", self.brief(case, lane=lane),
+                                                   self.lane_tools(lane), RetrievalOut, lane=lane)) for lane in LANES]
+            try:
+                runs = await asyncio.gather(*tasks)
+            except GuardrailError:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
             case["retrieval"] = {"started": started, "finished": now_utc(), "lanes": {r["lane"]: len(r["fact_ids"]) for r in runs},
                                  "fact_ids": sorted({f for r in runs for f in r["fact_ids"]})}
             self.refresh_flags(case, self.view())

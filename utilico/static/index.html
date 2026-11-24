@@ -25,7 +25,7 @@
         </button>
       </template>
     </div>
-    <p class="faint" style="margin-top:18px">Agent: mock (scripted) · no network at runtime · source CSVs read-only · nothing is executed after the decision.</p>
+    <p class="faint" style="margin-top:18px"><span x-text="agent ? agent.label : 'Agent: connecting'"></span> · <span x-text="agent && agent.mode !== 'mock' ? 'Case data is sent to the configured model API' : 'No model network requests'"></span> · source CSVs read-only · nothing is executed after the decision.</p>
   </div>
 </template>
 

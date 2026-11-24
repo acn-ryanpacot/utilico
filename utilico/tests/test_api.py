@@ -3,12 +3,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.config import Config
 from tests.conftest import DATA_DIR
 
 
 @pytest.fixture(scope="module")
 def client(tmp_path_factory):
-    app = create_app(DATA_DIR, state_root=str(tmp_path_factory.mktemp("state")))
+    app = create_app(DATA_DIR, state_root=str(tmp_path_factory.mktemp("state")),
+                     cfg=Config(overrides={"agent.json": {"mode": "mock", "max_tool_calls": 12}}))
     with TestClient(app) as c:
         yield c, app
 

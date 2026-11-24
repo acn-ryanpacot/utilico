@@ -31,7 +31,7 @@ def money_ok(a, b, tol):
 class SelfTest:
     def __init__(self, registry, kb, source_hashes_before=None):
         self.registry, self.kb = registry, kb
-        self.cfg = Config(overrides={"agent.json": {"step_latency_ms": 0}})
+        self.cfg = Config(overrides={"agent.json": {"mode": "mock", "step_latency_ms": 0, "max_tool_calls": 12}})
         self.ex = self.cfg.expected()
         self.tol = self.ex["tolerance"]
         self.hashes_before = source_hashes_before

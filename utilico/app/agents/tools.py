@@ -36,9 +36,31 @@ SPECS = {
 READ_TOOLS = ["get_work_orders", "get_integration_messages", "get_todos", "get_service_agreement", "get_bills", "get_daily_reads",
               "get_meter", "get_crm_cases", "get_gl_lines", "get_gl_period", "find_similar_premises"]
 
+_STRING = {"type": "string"}
+_STRINGS = {"type": "array", "items": _STRING}
+_ARGS = {
+    "get_work_orders": ({"premise_id": _STRING, "wo_id": _STRING}, ["premise_id"]),
+    "get_integration_messages": ({"wo_id": _STRING}, ["wo_id"]),
+    "get_todos": ({"wo_id": _STRING, "sa_id": _STRING}, ["wo_id"]),
+    "get_service_agreement": ({"sa_id": _STRING}, ["sa_id"]),
+    "get_bills": ({"sa_id": _STRING, "bill_ids": _STRINGS}, ["sa_id"]),
+    "get_daily_reads": ({"meter_id": _STRING, "from": _STRING, "to": _STRING, "purpose": _STRING}, ["meter_id", "from", "to"]),
+    "get_meter": ({"meter_id": _STRING}, ["meter_id"]),
+    "get_crm_cases": ({"account_id": _STRING}, ["account_id"]),
+    "get_gl_lines": ({"bill_ids": _STRINGS}, ["bill_ids"]),
+    "get_gl_period": ({"period": _STRING}, ["period"]),
+    "find_similar_premises": ({"premise_id": _STRING}, ["premise_id"]),
+    "run_rules": ({}, []),
+    "calculate": ({"kind": {"type": "string", "enum": ["draft", "credit"]}, "bill_id": _STRING}, ["kind"]),
+    "project_exposure": ({"after_period_end": {"type": ["string", "null"]}}, []),
+    "search_knowledge": ({"query": _STRING, "collection": _STRING, "k": {"type": "integer"}}, ["query"]),
+    "get_case_packet": ({}, []),
+}
+
 
 def specs(names):
-    return [{"name": n, "description": SPECS.get(n, n), "input_schema": {"type": "object"}} for n in names]
+    return [{"name": n, "description": SPECS.get(n, n), "input_schema": {
+        "type": "object", "properties": _ARGS.get(n, ({}, []))[0], "required": _ARGS.get(n, ({}, []))[1]}} for n in names]
 
 
 def pick(row, keys):

@@ -21,7 +21,7 @@ guard.set_offline_env()            # before chromadb / onnx are imported
 
 
 def main():
-    ap = argparse.ArgumentParser(description="AI-Utilico (local, offline, mocked agents)")
+    ap = argparse.ArgumentParser(description="AI-Utilico (local app)")
     ap.add_argument("--port", type=int, default=8501)
     ap.add_argument("--data", default=None, help="data folder (default C:\\sources\\Utilco\\data or UTILICO_DATA_DIR)")
     ap.add_argument("--no-browser", action="store_true")
@@ -53,11 +53,11 @@ def main():
     from app.main import create_app
     print("AI-Utilico - billed-after-disconnection agent workflow (Utilico Energy, fictional data)")
     print("  Data folder : %s (read-only)" % data_dir)
-    print("  Offline     : OFFLINE_GUARD=%s - non-localhost connections are blocked and logged" % os.environ.get("OFFLINE_GUARD", "1"))
+    print("  Offline     : OFFLINE_GUARD=%s - outbound connections blocked except configured live model requests" % os.environ.get("OFFLINE_GUARD", "1"))
     app = create_app(data_dir)
     kb = app.state.tb.kb
     print("  Knowledge   : %s%s" % (kb.mode, " (%s)" % kb.error if kb.error else ""))
-    print("  Agent       : mock (scripted), no API key")
+    print("  Agent       : %s" % app.state.tb.engine.llm.mode)
     url = "http://127.0.0.1:%d/" % a.port
     print("  URL         : %s   (Ctrl+C to stop)" % url)
     if not a.no_browser:

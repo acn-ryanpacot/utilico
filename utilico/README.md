@@ -1,10 +1,10 @@
 # AI-Utilico — billed-after-disconnection agent workflow (Utilico Energy)
 
-Agents (Orchestrator, Data Retrieval in five parallel lanes, Reconciliation, Recommendation) and one accountable human decision point (the DRI) — catching **customers billed for days after their service was physically disconnected**, and accounts still active after a disconnect. The process ends at the DRI's decision (approved or rejected), which seals the case; nothing is executed afterwards. All data is fictional. Runs fully offline; the LLM is a deterministic mock. Accenture colour theme (colours only, light and dark).
+Agents (Orchestrator, Data Retrieval in five parallel lanes, Reconciliation, Recommendation) and one accountable human decision point (the DRI) — catching **customers billed for days after their service was physically disconnected**, and accounts still active after a disconnect. The process ends at the DRI's decision (approved or rejected), which seals the case; nothing is executed afterwards. All data is fictional. Agents can use a live model or a deterministic offline mock. Accenture colour theme (colours only, light and dark).
 
 Rules: [`docs/workflow_rules.md`](docs/workflow_rules.md) (v3.2). Stack and versions: [`docs/deck_notes_stack.md`](docs/deck_notes_stack.md).
 
-## Setup (once — the only step that uses the network)
+## Setup (once)
 
 ```powershell
 cd C:\sources\Utilco\utilico
@@ -22,6 +22,14 @@ Installed versions: Python 3.14.4 · fastapi 0.162.2 · starlette 1.10.0 · uvic
 ```
 
 Starts Uvicorn on `http://127.0.0.1:8501/` and opens the browser. Options: `--port 8600`, `--no-browser`, `--data "D:\extracts"` (or `UTILICO_DATA_DIR`; default `C:\sources\Utilco\data`).
+
+### Live model
+
+Set `MODEL_API_BASE_URL`, `MODEL_NAME`, and optionally `MODEL_TIMEOUT_SECONDS` in `utilico/.env`. The base URL must omit `/chat/completions` and use HTTPS (HTTP is allowed for localhost). Supply `MODEL_API_KEY` as a process environment variable; process environment variables override the file. Never put a real API key in the shared `.env` file. The endpoint must support OpenAI-compatible Chat Completions, function calling, and JSON response format.
+
+Set `config/agent.json` mode to `openai-compatible` and restart the app. Case details and tool results are sent to the configured model provider. Retrieval, reconciliation and recommendation agents call the model when a case is started or rerun; the human DRI still makes the final decision. Tool availability, cited facts, deterministic calculations, and output validation remain server-side.
+
+`max_tool_calls: null` removes the per-agent tool-call cap. Repeated model calls can continue indefinitely and incur costs; use a positive integer to enforce a limit. Set the mode to `mock` and restart to use scripted agents without model requests. The in-app self-test always uses mock agents and a 12-call cap.
 
 - `python run.py --reset` — clears cases, lookups and evidence (appends `DEMO_RESET`; the audit log is kept).
 - `python run.py --reset --purge-log` — also deletes the audit log. Command line only; there is no edit or delete path in the app.
@@ -47,11 +55,10 @@ Plus the in-app Self-test screen (≈190 checks: POC 1 answer keys, back-scan �
 
 ## Offline verification
 
-`OFFLINE_GUARD=1` (default) patches sockets so any non-localhost connection is blocked and logged as `OFFLINE_GUARD_BLOCKED`. ChromaDB runs with `anonymized_telemetry=False` and the embedding function reads `models/` only. If ChromaDB cannot load, the app falls back to keyword similarity and shows "Knowledge store: fallback mode".
+`OFFLINE_GUARD=1` (default) blocks and logs non-localhost connections as `OFFLINE_GUARD_BLOCKED`, except during a configured live-model request. ChromaDB runs with `anonymized_telemetry=False` and the embedding function reads `models/` only. If ChromaDB cannot load, the app falls back to keyword similarity and shows "Knowledge store: fallback mode".
 
 ## Swapping in production components
 
-- **Real LLM** — implement `ClaudeLLMClient.run_turn()` in `app/agents/llm.py` (Anthropic Messages API with tool use) and set `config/agent.json` `"mode": "claude"`. Tool execution, guardrails, point-in-time reads and validation stay server-side; nothing else changes.
 - **Live data** — implement `ContextServiceDataSource` in `app/datasource/__init__.py` (a CDC-fed replicated read store behind one billing-context API, with per-connector lag for the freshness check) and select it in configuration.
 
 ## Layout
