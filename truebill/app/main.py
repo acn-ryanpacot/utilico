@@ -14,7 +14,7 @@ from . import backscan as BS
 from . import guard
 from .auth import current_user, require
 from .config import Config
-from .datasource import F_READ, KEY_FIELD, SOURCE_FILES, SYSTEM_LABEL, SYSTEM_OF_FILE, F_MEMO, F_NOTE, Registry
+from .datasource import F_READ, KEY_FIELD, SOURCE_FILES, SYSTEM_LABEL, SYSTEM_OF_FILE, Registry
 from .engine import Engine
 from .events import PRESETS, SCENARIOS
 from .kpi import kpis
@@ -132,19 +132,8 @@ def create_app(data_dir=None, state_root=STATE_DIR):
             na = None
             if p == "CSR" and c["state"] == "TRIAGE":
                 na = "Confirm the ID match" if c["match"]["status"] == "PENDING" else "Confirm triage"
-            elif p == "CSR" and c["state"] == "READY_FOR_CSR":
-                na = "Release the held bill and send the summary" if c["type"] == "PREVENT" and not c["csr"]["released"] else \
-                    "Send the regulator response" if c["type"] == "REGULATORY_RESPONSE" else "Send the customer summary"
             elif p == "DRI" and c["state"] == "AWAITING_DRI":
-                na = "Decide%s" % (" (returned)" if c["returned"] else "")
-            elif p == "DRI" and c["state"] == "PLAN_APPROVAL" and c.get("plan"):
-                na = "Approve the execution plan"
-            elif p == "DRI" and c["state"] == "OUTPUT_APPROVAL":
-                na = "Approve the outputs"
-            elif p == "DRI" and c["state"] == "RESOLVED":
-                na = "Close and seal"
-            elif p == "FINANCE" and c["state"] == "PENDING_FINANCE":
-                na = "Approve the reversal of posted revenue"
+                na = "Decide - approve or reject (final)"
             if na:
                 sv = s.sla_view(c)
                 items.append({"case_id": c["case_id"], "type": c["type"], "customer_name": c["customer_name"], "account_id": c["account_id"],
@@ -220,8 +209,6 @@ def create_app(data_dir=None, state_root=STATE_DIR):
                     eng.session(dsid, scid).reset(u["user_id"], "Reset all scenarios")
             else:
                 s.reset(u["user_id"])
-        elif op == "inject_failure":
-            s.set_toggle(u["user_id"], "inject_failure", bool(b.get("value", True)))
         elif op == "stale_feed":
             s.set_toggle(u["user_id"], "stale_mdm", bool(b.get("value")))
         elif op == "autopilot":
@@ -257,7 +244,20 @@ def create_app(data_dir=None, state_root=STATE_DIR):
     async def cases(request: Request):
         require(st, request, "cases")
         s = ctx(request)
-        return {"cases": [case_row(s, c) for c in sorted(s.state["cases"].values(), key=lambda c: c["case_id"])]}
+        return {"cases": [case_row(s, c) for c in sorted(s.state["cases"].values(), key=lambda c: c["case_id"]) if c["state"] != "NO_ISSUE"]}
+
+    # ---- CSR account lookup ------------------------------------------------------------------------------
+    @app.post("/api/lookup")
+    async def lookup(request: Request, body: Body):
+        u = require(st, request, "lookup", ("A",), "look up an account")
+        return ctx(request).lookup(u, body.model_dump().get("account_id"))
+
+    @app.get("/api/lookup")
+    async def lookups(request: Request):
+        require(st, request, "lookup", ("A",), "open Account lookup")
+        s = ctx(request)
+        return {"clock": s.clock, "items": [case_row(s, c) | {"reconciled": bool(c.get("reconciliation")), "facts": len(s.evidence.for_case(c["case_id"]))}
+                                            for c in sorted(s.state["cases"].values(), key=lambda c: c["case_id"], reverse=True) if c.get("lookup")]}
 
     @app.get("/api/cases/{case_id}")
     async def case_detail(case_id: str, request: Request, view: int = 0):
@@ -274,13 +274,8 @@ def create_app(data_dir=None, state_root=STATE_DIR):
         out["sla_view"] = s.sla_view(c)
         out["facts"] = s.evidence.for_case(case_id)
         out["audit_trail"] = eng.audit.query({"case": case_id, "dataset": s.ds.id, "scenario": s.sc_id}, 500)["events"]
-        v = s.view()
-        out["sandbox_bill"] = {k: v2 for k, v2 in (v.bills.get(c["draft_bill_id"]) or {}).items()} if c.get("draft_bill_id") else None
-        out["credit_memo"] = v.memos.get("CM-%s" % case_id)
-        out["overlays"] = s.sandbox.by_case(case_id)
         link = s.state["cases"].get(c.get("linked_case_id")) if c.get("linked_case_id") else None
         out["linked_case"] = case_row(s, link) | {"seal": link.get("seal")} if link else None
-        out["view_mode"] = "finance" if u["persona"] == "FINANCE" else "full"
         return out
 
     @app.post("/api/cases/{case_id}/action")
@@ -290,44 +285,6 @@ def create_app(data_dir=None, state_root=STATE_DIR):
         s = ctx(request)
         c = s.act(u, case_id, b.get("action"), b)
         return {"case": case_row(s, c)}
-
-    @app.get("/api/cases/{case_id}/outputs/{name}")
-    async def output_file(case_id: str, name: str, request: Request):
-        require(st, request, "case")
-        s = ctx(request)
-        c = s.state["cases"].get(case_id)
-        f = ((c or {}).get("outputs") or {}).get("files", {}).get(name)
-        if not f:
-            raise NotFound("No such output")
-        return Response(f["text"], media_type="text/markdown; charset=utf-8",
-                        headers={"Content-Disposition": 'attachment; filename="%s_%s.md"' % (case_id, name)})
-
-    @app.get("/api/finance")
-    async def finance(request: Request):
-        require(st, request, "finance")
-        s = ctx(request)
-        base = s.view(sandbox=False)
-        items = []
-        for c in s.state["cases"].values():
-            if c["type"] != "REMEDIATE" or not (c["state"] == "PENDING_FINANCE" or c.get("finance")):
-                continue
-            gl = []
-            for b in c["bill_ids"]:
-                for x in base.gl_by_ref.get(b, []):
-                    gl.append(dict(x, period_status=(base.periods.get(x["accounting_period"]) or {}).get("status")))
-            per = base.current_period()
-            items.append(case_row(s, c) | {"bills": c["bill_ids"], "gl": gl, "credit_period": per, "credit_period_status": (base.periods.get(per) or {}).get("status"),
-                                           "decision": c.get("decision"), "finance": c.get("finance"),
-                                           "rationale": (c.get("recommendation") or {}).get("rationale"), "calculation": (c.get("recommendation") or {}).get("calculation")})
-        return {"items": items}
-
-    @app.get("/api/outputs")
-    async def outputs_queue(request: Request):
-        require(st, request, "outputs", ("A",), "open Output approval")
-        s = ctx(request)
-        return {"items": [case_row(s, c) | {"outputs": {n: {"label": f["label"]} for n, f in c["outputs"]["files"].items()},
-                                             "consistency": c["outputs"]["consistency"], "citations": c["outputs"]["citations"]}
-                          for c in s.state["cases"].values() if c["state"] == "OUTPUT_APPROVAL" and c.get("outputs")]}
 
     # ---- back-scan, daily check, explorer, knowledge ---------------------------------------------------------
     @app.get("/api/backscan")
@@ -366,14 +323,13 @@ def create_app(data_dir=None, state_root=STATE_DIR):
                 "excluded_nonpay": [x["wo"]["wo_id"] for x in det["daily"]["excluded_nonpay"]], "case_codes": s.ds.case_codes}
 
     @app.get("/api/explorer")
-    async def explorer(request: Request, file: str = "oms_work_orders.csv", mode: str = "base", q: str = "", page: int = 0):
+    async def explorer(request: Request, file: str = "oms_work_orders.csv", q: str = "", page: int = 0):
         require(st, request, "explorer")
         s = ctx(request)
-        files = list(SOURCE_FILES) + [F_MEMO, F_NOTE]
+        files = list(SOURCE_FILES)
         if file not in files:
             raise NotFound("Unknown file")
-        sandbox = mode == "sandbox"
-        v = View(s.ds, None, s.sandbox.overlays if sandbox else None)      # the extracts as delivered (+ this scenario's overlays)
+        v = View(s.ds, None)      # the extracts exactly as delivered (read-only; nothing is ever written back)
         if file == F_READ:
             rows = [r for m in v.reads_by_meter.values() for r in m.values()]
             rows.sort(key=lambda r: r["read_id"])
@@ -386,8 +342,8 @@ def create_app(data_dir=None, state_root=STATE_DIR):
         n = len(rows)
         page_rows = rows[page * 100:(page + 1) * 100]
         return {"file": file, "files": [{"file": f, "system": SYSTEM_LABEL.get(SYSTEM_OF_FILE.get(f), "Sandbox")} for f in files],
-                "headers": headers, "rows": [{"cells": [r.get(h, "") for h in headers], "overlay": r.get("_overlay")} for r in page_rows],
-                "total": n, "page": page, "pages": max(1, (n + 99) // 100), "mode": mode, "overlays": len(s.sandbox.overlays), "key": KEY_FIELD.get(file)}
+                "headers": headers, "rows": [{"cells": [r.get(h, "") for h in headers]} for r in page_rows],
+                "total": n, "page": page, "pages": max(1, (n + 99) // 100), "key": KEY_FIELD.get(file)}
 
     @app.get("/api/knowledge")
     async def knowledge(request: Request, q: str = "", collection: str = "case_history"):

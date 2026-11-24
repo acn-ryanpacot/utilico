@@ -15,7 +15,7 @@
   <div class="signin">
     <div class="brand"><div class="logo">TB</div><div><h1>AI-TrueBILL</h1><p>Billed-after-disconnection agent workflow · Utilico Energy (fictional data)</p></div></div>
     <h2 style="margin-top:26px">Sign in</h2>
-    <p class="muted">Simulated sign-in, no passwords. Five agents propose and execute; one accountable human - the DRI - decides every case. The server enforces every permission and segregation-of-duties rule.</p>
+    <p class="muted">Simulated sign-in, no passwords. Agents retrieve, reconcile and recommend; one accountable human - the DRI - makes the final decision on every case, and the process ends there. The server enforces every permission and segregation-of-duties rule.</p>
     <div class="users">
       <template x-for="u in users" :key="u.user_id">
         <button class="ucard" type="button" @click="signIn(u.user_id)">
@@ -25,7 +25,7 @@
         </button>
       </template>
     </div>
-    <p class="faint" style="margin-top:18px">Agent: mock (scripted) · no network at runtime · source CSVs read-only · corrections go to a sandbox.</p>
+    <p class="faint" style="margin-top:18px">Agent: mock (scripted) · no network at runtime · source CSVs read-only · nothing is executed after the decision.</p>
   </div>
 </template>
 
@@ -90,15 +90,16 @@
         <div class="card"><div class="card-head"><h3>Day-30 gate</h3><span class="badge" :class="data.kpis.gate.pass ? 'ok' : 'bad'" x-text="data.kpis.gate.pass ? 'PASS' : 'not yet'"></span></div>
           <div class="card-body gate"><template x-for="r in data.kpis.gate.rows" :key="r.name"><div :class="r.pass ? 'pass' : 'fail'"><span x-text="r.name"></span><b x-text="r.display"></b><span x-text="'target ' + r.target"></span></div></template></div></div>
         <section class="kpis">
-          <div class="kpi emph"><div class="l">$ prevented</div><div class="v" x-text="money(data.kpis.prevented)"></div><div class="s">draft reductions + suppressed bills</div></div>
-          <div class="kpi emph"><div class="l">$ remediated</div><div class="v" x-text="money(data.kpis.remediated)"></div><div class="s">credit memos (posted revenue)</div></div>
-          <div class="kpi"><div class="l">$ projected exposure (open)</div><div class="v" x-text="money(data.kpis.projected_exposure_open)"></div><div class="s">open ADVANCE cases</div></div>
-          <div class="kpi"><div class="l">Bills held / passed</div><div class="v" x-text="data.kpis.bills.held + ' / ' + data.kpis.bills_passed"></div><div class="s" x-text="data.kpis.bills.suppressed + ' suppressed · ' + data.kpis.bills.regenerated + ' regenerated'"></div></div>
+          <div class="kpi emph"><div class="l">$ prevented (approved)</div><div class="v" x-text="money(data.kpis.prevented)"></div><div class="s">PREVENT reductions the DRI approved</div></div>
+          <div class="kpi emph"><div class="l">$ remediated (approved)</div><div class="v" x-text="money(data.kpis.remediated)"></div><div class="s">credits the DRI approved</div></div>
+          <div class="kpi emph"><div class="l">$ exposure addressed</div><div class="v" x-text="money(data.kpis.exposure_addressed)"></div><div class="s" x-text="'approved ADVANCE · ' + money(data.kpis.projected_exposure_open) + ' still open'"></div></div>
+          <div class="kpi"><div class="l">Decisions</div><div class="v" x-text="data.kpis.approved + ' / ' + data.kpis.rejected"></div><div class="s">approved / rejected (final, sealed)</div></div>
+          <div class="kpi"><div class="l">Bills held / passed</div><div class="v" x-text="data.kpis.bills.held + ' / ' + data.kpis.bills.passed"></div><div class="s" x-text="data.kpis.bills.held_on_existing_case + ' held on an existing case'"></div></div>
           <div class="kpi" :class="data.kpis.sla_breached ? 'warn' : ''"><div class="l">SLA at risk / breached</div><div class="v" x-text="data.kpis.sla_at_risk + ' / ' + data.kpis.sla_breached"></div><div class="s">75% / 100% of target (flags only)</div></div>
           <div class="kpi"><div class="l">Packet assembly</div><div class="v" x-text="data.kpis.packet_seconds.median === null ? '—' : data.kpis.packet_seconds.median + ' s'"></div><div class="s" x-text="'median · max ' + (data.kpis.packet_seconds.max ?? '—') + ' s'"></div></div>
           <div class="kpi"><div class="l">Conflict detection</div><div class="v" x-text="data.kpis.conflict_seconds.median === null ? '—' : data.kpis.conflict_seconds.median + ' s'"></div><div class="s">event → reconciliation</div></div>
           <div class="kpi"><div class="l">Detection / false positives</div><div class="v" x-text="pct(data.kpis.detection_rate) + ' / ' + pct(data.kpis.false_positive_rate)"></div><div class="s" x-text="'expected ' + data.kpis.expected.join(', ')"></div></div>
-          <div class="kpi"><div class="l">Citations / consistency</div><div class="v" x-text="pct(data.kpis.citation_coverage) + ' / ' + pct(data.kpis.output_consistency)"></div><div class="s" x-text="data.kpis.factual_sentences + ' factual sentences'"></div></div>
+          <div class="kpi"><div class="l">Citation coverage</div><div class="v" x-text="pct(data.kpis.citation_coverage)"></div><div class="s" x-text="data.kpis.agent_statements + ' agent statements · ' + data.kpis.lookups + ' lookup(s)'"></div></div>
           <div class="kpi"><div class="l">Triage agreement</div><div class="v" x-text="pct(data.kpis.triage_agreement)"></div><div class="s" x-text="data.kpis.green_cases + ' Green case(s) decided'"></div></div>
         </section>
         <div class="grid3">
@@ -132,6 +133,34 @@
           <div class="empty" x-show="!data.items.length">Nothing is waiting on you in this scenario.</div></div></div></div>
     </template>
 
+    <!-- ===== account lookup (CSR) ===== -->
+    <template x-if="route.screen==='lookup' && data.items">
+      <div><div class="page-head"><div><h2>Account lookup</h2><p x-text="'Enter an account number - the agents retrieve all five systems and reconcile them as of the scenario clock (' + data.clock + ').'"></p></div></div>
+        <div class="card"><div class="card-body">
+          <div class="lookup-box"><input class="input mono" placeholder="Account number, e.g. 8800010101" x-model="lookupAcc" @keydown.enter="runLookup()" aria-label="Account number">
+            <button class="btn primary" :disabled="lookupBusy" @click="runLookup()" x-text="lookupBusy ? 'Starting…' : 'Check account'"></button></div>
+          <template x-if="lookupResult">
+            <div class="result" :class="{ok: lookupResult.status==='NO_DISCONNECT' || lookupState(lookupResult.case_id)==='NO_ISSUE', case: ['TRIAGE','AWAITING_DRI','APPROVED','REJECTED'].includes(lookupState(lookupResult.case_id)) || lookupResult.status==='EXISTING'}">
+              <b x-text="lookupResult.customer_name || ''"></b> <span class="mono" x-text="lookupResult.account_id || ''"></span>
+              <div x-text="lookupResult.message"></div>
+              <template x-if="lookupResult.case_id"><div style="margin-top:6px">
+                <span x-show="['NEW','RETRIEVING','RECONCILING','RECOMMENDING'].includes(lookupState(lookupResult.case_id))"><span class="state agent" x-text="lookupState(lookupResult.case_id)"></span> agents working…</span>
+                <span x-show="lookupState(lookupResult.case_id)==='NO_ISSUE'"><span class="badge ok">No issue found</span> No rule fired - no case opened, nothing sent to the DRI.</span>
+                <span x-show="['TRIAGE','AWAITING_DRI','APPROVED','REJECTED'].includes(lookupState(lookupResult.case_id)) || lookupResult.status==='EXISTING'"><span class="badge bad">Finding</span> A case is open and waiting in triage.</span>
+                <a :href="'#/case/' + lookupResult.case_id" class="mono" x-text="' Open ' + lookupResult.case_id + ' →'"></a></div></template>
+            </div></template>
+          <p class="faint" style="margin:10px 0 0">Findings open a case (LK-…) that goes to your triage and then to the DRI for the final decision. If no rule fires, the agents' evidence is kept for reference but no case is opened. Usage after a disconnect that was not billed is out of scope.</p>
+        </div></div>
+        <div class="card"><div class="card-head"><h3>Your lookups</h3><span class="muted" x-text="data.items.length + ' in this scenario'"></span></div>
+          <div class="table-wrap"><table class="grid"><thead><tr><th>Lookup</th><th>Account</th><th>Customer</th><th>Result</th><th>Rules fired</th><th class="r">Amount</th><th>Facts</th><th>At</th></tr></thead><tbody>
+            <template x-for="i in data.items" :key="i.case_id"><tr class="click" @click="go('case', i.case_id)">
+              <td class="mono" x-text="i.case_id"></td><td class="mono" x-text="i.account_id"></td><td><span x-text="i.customer_name"></span><span class="code" x-show="code(i.account_id)" x-text="code(i.account_id)"></span></td>
+              <td><span class="state" :class="stateClass(i.state)" x-text="i.state==='NO_ISSUE' ? 'no issue' : i.state"></span></td>
+              <td><template x-for="r in (i.rules_fired||[])" :key="r"><span class="rule on" x-text="r"></span></template><span class="faint" x-show="i.reconciled && !(i.rules_fired||[]).length">none</span></td>
+              <td class="r num" x-text="i.state==='NO_ISSUE' ? '—' : money(i.amount)"></td><td x-text="i.facts"></td><td class="num" x-text="i.opened_at"></td></tr></template></tbody></table>
+            <div class="empty" x-show="!data.items.length">No lookups yet.</div></div></div></div>
+    </template>
+
     <!-- ===== timeline & demo ===== -->
     <template x-if="route.screen==='timeline'">
       <div><div class="page-head"><div><h2>Timeline &amp; demo</h2><p x-text="(scenarios.find(s=>s.id===scId)||{}).label"></p></div></div>
@@ -140,10 +169,8 @@
             <template x-for="p in presets" :key="p.id"><div class="row" style="margin:0 0 6px"><button class="btn" :disabled="p.scenario!==scId" @click="tl('preset', {preset: p.id})" x-text="p.label"></button><span class="faint" x-show="p.scenario!==scId" x-text="'switch to ' + p.scenario"></span></div></template>
             <p class="faint">With "Pause for humans" on, a jump stops whenever a case waits for a person; turn on Autopilot (or act yourself) to continue.</p></div></div>
           <div class="card"><div class="card-head"><h3>Demo tools</h3><span class="muted">every action is audited</span></div><div class="card-body">
-            <div class="row"><button class="btn" @click="confirm('Reset tickets, sandbox and outputs for ' + scId + '? The audit log is kept.') && demo('reset', {}, 'Scenario reset')">Reset demo state</button>
+            <div class="row"><button class="btn" @click="confirm('Reset all cases and lookups for ' + scId + '? The audit log is kept.') && demo('reset', {}, 'Scenario reset')">Reset demo state</button>
               <button class="btn" @click="confirm('Reset every dataset and scenario? The audit log is kept.') && demo('reset', {scope:'all'}, 'All scenarios reset')">Reset all</button></div>
-            <div class="row"><button class="btn danger" @click="demo('inject_failure', {value:true}, 'Armed: the next execution step will fail its check')">Inject failure on next step</button>
-              <span class="badge warn" x-show="st && st.timeline.toggles.inject_failure">armed</span></div>
             <div class="row"><label class="switch"><input type="checkbox" :checked="st && st.timeline.toggles.stale_mdm" @change="toggle('stale_mdm', $event.target.checked)"> Simulate stale MDM feed (6 h)</label>
               <span class="faint" x-text="st ? 'MDM lag ' + st.freshness.lags.MDM + ' min (max ' + st.freshness.max_lag_minutes + ')' : ''"></span></div>
             <div class="row"><button class="btn primary" @click="demo('autopilot', {value:true, speed: 4}, 'Autopilot on - each persona\'s next recommended action, logged with autopilot=true')">Autopilot (play to end)</button>
@@ -185,7 +212,10 @@
             · rule set <b x-text="caseData.rule_set_version"></b> · <span class="mono" x-text="caseData.jira_id"></span></p>
           <p class="muted"><span class="mono" x-text="caseData.account_id"></span> · SA <span class="mono" x-text="caseData.sa_id"></span> · meter <span class="mono" x-text="caseData.meter_id"></span> · <span class="mono" x-text="caseData.wo_id"></span> (<span x-text="caseData.subtype"></span>) on <b x-text="caseData.window.disconnect_date"></b> · opened <span x-text="caseData.opened_at"></span> by <span x-text="caseData.origin.type + ' ' + (caseData.origin.ref||'')"></span></p>
         </div><span class="state" :class="stateClass(caseData.state)" x-text="caseData.state"></span></div>
-        <div class="states"><template x-for="s in LIFECYCLE" :key="s"><span :class="lifecycleClass(caseData, s)" x-text="s.toLowerCase().replace(/_/g,' ')"></span></template></div>
+        <div class="states"><template x-for="s in LIFECYCLE" :key="s"><span :class="lifecycleClass(caseData, s)" x-text="lifecycleLabel(caseData, s)"></span></template></div>
+        <div class="banner" x-show="caseData.state==='NO_ISSUE'">Account lookup by Maya: the agents retrieved and reconciled this account at <b x-text="caseData.opened_at"></b> and no rule fired - no case was opened and nothing went to the DRI.</div>
+        <div class="banner" x-show="caseData.decision" x-text="caseData.decision ? ('Final decision: ' + caseData.decision.outcome + ' - ' + (caseData.decision.label || caseData.decision.kind) + ' by ' + uname(caseData.decision.by) + (caseData.decision.reason ? ' - “' + caseData.decision.reason + '”' : '') + '. The case is sealed; the process ends here.') : ''"></div>
+        <div class="banner" x-show="(caseData.attached_bills||[]).length" x-text="'Held at later bill runs and attached to this decided case: ' + (caseData.attached_bills||[]).join(', ')"></div>
         <div class="banner err" x-show="caseData.agent_error" x-text="'Guardrail: ' + caseData.agent_error"></div>
 
         <!-- action panel: only the persona allowed to make the next transition sees buttons -->
@@ -204,25 +234,10 @@
             <label class="opt" x-show="caseData.type!=='REGULATORY_RESPONSE'"><input type="radio" value="RELEASE_AS_IS" x-model="form.kind"><span>Release as-is - override (reason required)</span></label>
             <label class="opt"><input type="radio" value="CANCEL_FALSE_POSITIVE" x-model="form.kind"><span>Cancel as a false positive (reason required)</span></label>
             <textarea x-model="form.reason" placeholder="Reason"></textarea><div class="row"><button class="btn primary" @click="decide()">Record decision</button>
-              <span class="faint" x-text="caseData.type==='REMEDIATE' ? 'Next: Finance approves the reversal of posted revenue' : 'Next: the Execution agent proposes a plan'"></span></div></div>
-          <div class="sec" x-show="allowed('FINANCE_APPROVE')"><h4 x-text="'Finance - reversal of posted revenue ' + money(caseData.amount)"></h4><textarea x-model="form.reason" placeholder="Comment (required to reject)"></textarea>
-            <div class="row"><button class="btn primary" @click="act('FINANCE_APPROVE')">Approve reversal</button><button class="btn danger" @click="act('FINANCE_REJECT')">Reject</button></div></div>
-          <div class="sec" x-show="allowed('APPROVE_PLAN')"><h4>Execution plan (validated against the playbook)</h4><ol><template x-for="s in (caseData.plan||{}).steps||[]" :key="s.seq"><li><span class="mono" x-text="s.step"></span> <span class="faint mono" x-text="JSON.stringify(s.params)"></span></li></template></ol>
-            <textarea x-model="form.reason" placeholder="Comment (required to send back)"></textarea><div class="row"><button class="btn primary" @click="act('APPROVE_PLAN')">Approve plan</button><button class="btn danger" @click="act('RETURN_PLAN')">Send back</button></div></div>
-          <div class="sec" x-show="caseData.state==='PLAN_APPROVAL' && !caseData.plan && me.persona==='DRI'"><span class="muted">The Execution agent is building the plan…</span></div>
-          <div class="sec" x-show="allowed('APPROVE_OUTPUTS')"><h4>Outputs - approve (DRI approves all content, including regulatory)</h4>
-            <p><span class="badge" :class="caseData.outputs && caseData.outputs.consistency.pass ? 'ok' : 'bad'" x-text="caseData.outputs && caseData.outputs.consistency.pass ? 'Consistency check passed' : 'Consistency check FAILED'"></span>
-              <span class="badge" x-text="caseData.outputs ? 'citations ' + pct(caseData.outputs.citations.coverage) : ''"></span></p>
-            <ul x-show="caseData.outputs && !caseData.outputs.consistency.pass"><template x-for="i in (caseData.outputs||{consistency:{issues:[]}}).consistency.issues" :key="i"><li x-text="i"></li></template></ul>
-            <div class="row"><template x-for="(f, n) in (caseData.outputs||{}).files" :key="n"><button class="btn sm" @click="startEdit(n)" x-text="'Edit ' + f.label"></button></template></div>
-            <template x-if="form.outName"><div><textarea x-model="form.outText" style="min-height:220px" class="mono"></textarea><textarea x-model="form.reason" placeholder="Reason for the edit (required)"></textarea><div class="row"><button class="btn" @click="editOutput()">Save edit (re-checks consistency)</button></div></div></template>
-            <div class="row"><button class="btn primary" :disabled="!(caseData.outputs && caseData.outputs.consistency.pass)" @click="act('APPROVE_OUTPUTS')">Approve outputs</button></div></div>
-          <div class="sec" x-show="allowed('RELEASE_BILL')"><h4>Release the held bill</h4><p x-text="caseData.sandbox_bill ? (caseData.draft_bill_id + ' is now ' + caseData.sandbox_bill.bill_status + ' ' + money(caseData.sandbox_bill.total_amount)) : ''"></p><button class="btn primary" @click="act('RELEASE_BILL')">Release bill</button></div>
-          <div class="sec" x-show="allowed('SEND_CUSTOMER_SUMMARY')"><h4 x-text="caseData.type==='REGULATORY_RESPONSE' ? 'Send the approved regulator response' : 'Send the approved customer summary'"></h4><button class="btn primary" @click="act('SEND_CUSTOMER_SUMMARY')">Record as sent</button></div>
-          <div class="sec" x-show="allowed('SEAL')"><h4>Close and seal</h4><p class="muted">Computes the case hash over its audit events, evidence facts and output files. The case becomes read-only.</p><button class="btn primary" @click="act('SEAL')">Close and seal</button></div>
+              <span class="faint">Final: approve → APPROVED, release as-is / cancel → REJECTED. The decision seals the case; nothing is executed.</span></div></div>
         </div></div>
-        <div class="card" x-show="!caseData.allowed_actions.length && !['SEALED','CANCELLED'].includes(caseData.state)"><div class="empty" x-text="['NEW','RETRIEVING','RECONCILING','RECOMMENDING','EXECUTING','VERIFYING','DRAFTING_OUTPUTS'].includes(caseData.state) ? 'Agents are working on this case…' : 'Waiting on ' + ({TRIAGE:'the CSR',AWAITING_DRI:'the DRI',PENDING_FINANCE:'Finance',PLAN_APPROVAL:'the DRI',OUTPUT_APPROVAL:'the DRI',READY_FOR_CSR:'the CSR',RESOLVED:'the DRI'})[caseData.state] + '.'"></div></div>
-        <div class="card" x-show="caseData.seal"><div class="card-body">Sealed by <b x-text="caseData.seal && caseData.seal.by"></b> · case hash <span class="mono" x-text="caseData.seal && caseData.seal.case_hash"></span> · <span x-text="caseData.seal ? caseData.seal.audit_events + ' audit events, ' + caseData.seal.facts + ' facts, ' + caseData.seal.outputs + ' outputs' : ''"></span></div></div>
+        <div class="card" x-show="!caseData.allowed_actions.length && ['NEW','RETRIEVING','RECONCILING','RECOMMENDING','TRIAGE','AWAITING_DRI'].includes(caseData.state)"><div class="empty" x-text="['NEW','RETRIEVING','RECONCILING','RECOMMENDING'].includes(caseData.state) ? 'Agents are working on this case…' : 'Waiting on ' + ({TRIAGE:'Maya (CSR) to confirm triage',AWAITING_DRI:'Daniel (DRI) for the final decision'})[caseData.state] + '.'"></div></div>
+        <div class="card" x-show="caseData.seal"><div class="card-body">Sealed at the decision by <b x-text="caseData.seal && uname(caseData.seal.by)"></b> · case hash <span class="mono" x-text="caseData.seal && caseData.seal.case_hash"></span> · <span x-text="caseData.seal ? caseData.seal.audit_events + ' audit events, ' + caseData.seal.facts + ' facts' : ''"></span></div></div>
 
         <div class="grid2">
           <div>
@@ -239,16 +254,13 @@
                 <dt>System fixes</dt><dd x-text="((caseData.recommendation||{}).s_codes||[]).join(', ')"></dd>
                 <dt>Alternatives</dt><dd><template x-for="a in (caseData.recommendation||{}).alternatives||[]" :key="a.option"><div><b x-text="a.label"></b> - <span x-text="a.impact"></span></div></template></dd>
                 <dt>Similar past cases</dt><dd><span class="faint">context only - never changes the option or confidence</span><template x-for="s in (caseData.recommendation||{}).similar_cases||[]" :key="s.id"><div><span class="mono" x-text="s.id"></span> <span class="faint" x-text="'(' + s.score + ')'"></span> <span x-text="s.text"></span></div></template></dd></dl>
-              <p class="muted" x-show="caseData.decision" x-text="caseData.decision ? ('Decision: ' + (caseData.decision.label || caseData.decision.kind) + ' by ' + caseData.decision.by + (caseData.decision.reason ? ' - “' + caseData.decision.reason + '”' : '')) : ''"></p></div></div>
-            <div class="card"><div class="card-head"><h3>Money</h3></div><div class="card-body">
-              <template x-if="caseData.type==='PREVENT' && caseData.recommendation"><p>Draft <span class="mono" x-text="caseData.draft_bill_id"></span>: <b x-text="money(caseData.recommendation.calculation.before)"></b> → <b x-text="money(caseData.recommendation.calculation.after)"></b> (<span x-text="caseData.recommendation.calculation.action"></span>)<span x-show="caseData.sandbox_bill" x-text="caseData.sandbox_bill ? ' · sandbox: ' + caseData.sandbox_bill.bill_status + ' ' + money(caseData.sandbox_bill.total_amount) : ''"></span></p></template>
-              <template x-if="caseData.type==='REMEDIATE' && caseData.recommendation"><div><p>Credit <b x-text="money(caseData.recommendation.amount)"></b> on <span class="mono" x-text="(caseData.recommendation.calculation.bill_ids||[]).join(', ')"></span><span x-show="caseData.credit_memo" x-text="caseData.credit_memo ? ' · memo ' + caseData.credit_memo.memo_id + ' to period ' + caseData.credit_memo.accounting_period : ''"></span></p>
+              <p class="muted" x-show="caseData.decision" x-text="caseData.decision ? ('Decision: ' + (caseData.decision.label || caseData.decision.kind) + ' by ' + uname(caseData.decision.by) + (caseData.decision.reason ? ' - “' + caseData.decision.reason + '”' : '')) : ''"></p></div></div>
+            <div class="card"><div class="card-head"><h3>Money at stake</h3><span class="muted">counted when the DRI approves</span></div><div class="card-body">
+              <template x-if="caseData.type==='PREVENT' && caseData.recommendation"><p>Draft <span class="mono" x-text="caseData.draft_bill_id"></span>: <b x-text="money(caseData.recommendation.calculation.before)"></b> → <b x-text="money(caseData.recommendation.calculation.after)"></b> (<span x-text="caseData.recommendation.calculation.action"></span>)</p></template>
+              <template x-if="caseData.type==='REMEDIATE' && caseData.recommendation"><div><p>Credit <b x-text="money(caseData.recommendation.amount)"></b> on <span class="mono" x-text="(caseData.recommendation.calculation.bill_ids||[]).join(', ')"></span></p>
                 <table class="grid"><tr><th>Bill</th><th class="r">Days</th><th class="r">Phantom kWh</th><th class="r">Consumption</th><th class="r">Fixed</th><th class="r">Credit</th></tr><template x-for="l in caseData.recommendation.calculation.lines||[]" :key="l.bill_id"><tr><td class="mono" x-text="l.bill_id"></td><td class="r" x-text="l.overlap_days"></td><td class="r" x-text="l.phantom_kwh"></td><td class="r" x-text="money(l.consumption_credit)"></td><td class="r" x-text="money(l.fixed_credit)"></td><td class="r" x-text="money(l.credit)"></td></tr></template></table></div></template>
               <template x-if="caseData.type==='ADVANCE' && caseData.recommendation"><p>Projected exposure this cycle <b x-text="money(caseData.recommendation.amount)"></b> = round(<span x-text="caseData.recommendation.calculation.avg_kwh"></span> kWh × <span x-text="caseData.recommendation.calculation.days"></span> days × $<span x-text="caseData.recommendation.calculation.rate"></span>) + round(<span x-text="caseData.recommendation.calculation.days"></span> × $<span x-text="caseData.recommendation.calculation.fixed_daily"></span>)</p></template>
               <template x-if="caseData.type==='REGULATORY_RESPONSE'"><p>Linked to sealed case <a :href="'#/case/' + caseData.linked_case_id" class="mono" x-text="caseData.linked_case_id"></a> (<span x-text="money(caseData.amount)"></span>)</p></template></div></div>
-            <div class="card" x-show="caseData.plan"><div class="card-head"><h3>Plan</h3><span class="muted" x-text="caseData.plan && caseData.plan.approved_by ? 'approved by ' + caseData.plan.approved_by : 'awaiting approval'"></span></div>
-              <div class="table-wrap"><table class="grid"><tr><th>#</th><th>Step</th><th>Status</th><th>Result / check</th></tr><template x-for="s in (caseData.plan||{}).steps||[]" :key="s.seq"><tr><td x-text="s.seq"></td><td class="mono" x-text="s.step"></td><td><span class="badge" :class="s.status==='DONE' ? 'ok' : s.status==='FAILED' ? 'bad' : ''" x-text="s.status"></span></td><td><span x-text="s.result||''"></span><div class="faint" x-text="s.check_result||s.check"></div></td></tr></template></table></div>
-              <div class="card-foot" x-show="caseData.verification" x-text="caseData.verification ? ('Verifier: ' + (caseData.verification.passed ? 'PASSED - ' : 'FAILED - ') + caseData.verification.detail) : ''"></div></div>
           </div>
           <div>
             <div class="card"><div class="card-head"><h3>Agent activity</h3><span class="muted" x-text="(caseData.activity||[]).length + ' tool call(s) · mock'"></span></div><div class="card-body">
@@ -259,34 +271,9 @@
                 <template x-for="f in caseData.facts" :key="f.fact_id"><tr class="click" @click="openFact(f)"><td class="mono" x-text="f.fact_id"></td><td x-text="f.system"></td><td class="mono" x-text="f.record_id"></td><td x-text="f.kind"></td><td class="num" x-text="f.as_of"></td></tr></template></table></div></div>
           </div>
         </div>
-        <div class="card" x-show="caseData.outputs"><div class="card-head"><h3>Outputs</h3>
-          <span><span class="badge" :class="caseData.outputs && caseData.outputs.consistency.pass ? 'ok' : 'bad'" x-text="caseData.outputs && caseData.outputs.consistency.pass ? 'consistency ✓' : 'consistency ✗'"></span> <span class="badge" x-text="caseData.outputs ? 'citations ' + pct(caseData.outputs.citations.coverage) + ' (' + caseData.outputs.citations.factual + ' factual sentences)' : ''"></span></span></div>
-          <div class="card-body grid2"><template x-for="(f, n) in (caseData.outputs||{}).files" :key="n"><div><div class="row" style="margin:0 0 6px"><b x-text="f.label"></b><button class="btn sm" @click="download(caseData.case_id, n)">Download .md</button></div><div class="md" x-text="f.text"></div></div></template></div></div>
         <div class="card"><div class="card-head"><h3>Case audit trail</h3><span class="muted" x-text="(caseData.audit_trail||[]).length + ' event(s)'"></span></div>
           <div class="table-wrap" style="max-height:340px"><table class="grid"><tr><th>When</th><th>Who</th><th>What</th><th>Detail</th></tr><template x-for="e in caseData.audit_trail.filter(e => e.action!=='AGENT_TOOL_CALL')" :key="e.event_id"><tr><td class="num" style="white-space:nowrap" x-text="hhmm(e.timestamp_local) + ' · ' + (e.scenario_time||'')"></td><td x-text="who(e)"></td><td class="mono" x-text="e.action"></td><td x-text="detail(e)"></td></tr></template></table></div></div>
       </div>
-    </template>
-
-    <!-- ===== finance ===== -->
-    <template x-if="route.screen==='finance' && data.items">
-      <div><div class="page-head"><div><h2>Finance approvals</h2><p>Reversals of revenue already posted to the GL (REMEDIATE credits). Finance approves nothing else.</p></div></div>
-        <template x-for="i in data.items" :key="i.case_id"><div class="card"><div class="card-head"><h3><a :href="'#/case/' + i.case_id" class="mono" x-text="i.case_id"></a> <span x-text="i.customer_name"></span></h3><span><span class="prio" :class="i.priority" x-text="i.priority"></span> <span class="state" x-text="i.state"></span></span></div>
-          <div class="card-body"><dl class="kv"><dt>Amount</dt><dd><b x-text="money(i.amount)"></b> credit to period <b x-text="i.credit_period"></b> <span class="badge" :class="i.credit_period_status==='OPEN' ? 'ok' : 'bad'" x-text="i.credit_period_status"></span></dd>
-            <dt>Bills</dt><dd class="mono" x-text="i.bills.join(', ')"></dd>
-            <dt>GL lines</dt><dd><template x-for="g in i.gl" :key="g.je_id+g.je_line"><div class="mono" x-text="g.je_id + '/' + g.je_line + ' ' + g.accounting_period + ' (' + g.period_status + ') ' + g.gl_account + ' ' + g.gl_account_name + ' Dr ' + g.debit + ' Cr ' + g.credit"></div></template></dd>
-            <dt>DRI decision</dt><dd x-text="i.decision ? ((i.decision.label||i.decision.kind) + ' by ' + i.decision.by) : '—'"></dd><dt>Rationale</dt><dd x-text="i.rationale"></dd>
-            <dt>Outcome</dt><dd x-text="i.finance ? i.finance.outcome + ' by ' + i.finance.by : 'pending'"></dd></dl>
-            <div class="row" x-show="i.state==='PENDING_FINANCE' && lvl('finance')==='A'"><button class="btn primary" @click="go('case', i.case_id)">Open to approve / reject</button></div></div></div></template>
-        <div class="card" x-show="!data.items.length"><div class="empty">Nothing for Finance in this scenario.</div></div></div>
-    </template>
-
-    <!-- ===== output approval ===== -->
-    <template x-if="route.screen==='outputs' && data.items">
-      <div><div class="page-head"><div><h2>Output approval</h2><p>The DRI approves every output, including regulatory content. A failed consistency check blocks approval.</p></div></div>
-        <div class="card"><div class="table-wrap"><table class="grid"><tr><th>Case</th><th>Customer</th><th>Outputs</th><th>Consistency</th><th>Citations</th></tr>
-          <template x-for="i in data.items" :key="i.case_id"><tr class="click" @click="go('case', i.case_id)"><td class="mono" x-text="i.case_id"></td><td x-text="i.customer_name"></td><td x-text="Object.values(i.outputs).map(o=>o.label).join(', ')"></td>
-            <td><span class="badge" :class="i.consistency.pass ? 'ok' : 'bad'" x-text="i.consistency.pass ? 'pass' : 'fail'"></span></td><td x-text="pct(i.citations.coverage)"></td></tr></template></table>
-          <div class="empty" x-show="!data.items.length">No outputs waiting for approval.</div></div></div></div>
     </template>
 
     <!-- ===== back-scan ===== -->
@@ -320,14 +307,13 @@
 
     <!-- ===== explorer ===== -->
     <template x-if="route.screen==='explorer' && data.headers">
-      <div><div class="page-head"><div><h2>Data Explorer</h2><p x-text="data.mode==='sandbox' ? 'Source CSVs + ' + data.overlays + ' sandbox overlay(s) for ' + scId + ' (highlighted)' : 'The source CSVs exactly as extracted (read-only)'"></p></div></div>
+      <div><div class="page-head"><div><h2>Data Explorer</h2><p>The source CSVs exactly as extracted (read-only - nothing is ever written back)</p></div></div>
         <div class="card"><div class="card-head"><div class="row" style="margin:0">
-          <div class="chip"><button :class="{on: explorer.mode==='base'}" @click="explorer.mode='base'; explorer.page=0; load(false)">Base</button><button :class="{on: explorer.mode==='sandbox'}" @click="explorer.mode='sandbox'; explorer.page=0; load(false)">Sandbox</button></div>
           <select class="input" x-model="explorer.file" @change="explorer.page=0; explorer.q=''; load(false)"><template x-for="f in data.files" :key="f.file"><option :value="f.file" :selected="f.file===explorer.file" x-text="f.system + ' · ' + f.file"></option></template></select>
           <input class="input" type="search" placeholder="Search" x-model="explorer.q" @keydown.enter="explorer.page=0; load(false)"><button class="btn sm" @click="explorer.page=0; load(false)">Search</button></div>
           <div class="row" style="margin:0"><button class="btn sm" :disabled="!data.page" @click="explorer.page--; load(false)">‹</button><span class="muted" x-text="data.total + ' rows · page ' + (data.page+1) + '/' + data.pages"></span><button class="btn sm" :disabled="data.page>=data.pages-1" @click="explorer.page++; load(false)">›</button></div></div>
-          <div class="table-wrap"><table class="grid"><tr><th x-show="data.mode==='sandbox'">Overlay</th><template x-for="h in data.headers" :key="h"><th x-text="h"></th></template></tr>
-            <template x-for="(r, i) in data.rows" :key="i"><tr :class="{ov: r.overlay}"><td x-show="data.mode==='sandbox'" class="mono" x-text="r.overlay||''"></td><template x-for="(v, j) in r.cells" :key="j"><td x-text="v"></td></template></tr></template></table></div></div></div>
+          <div class="table-wrap"><table class="grid"><tr><template x-for="h in data.headers" :key="h"><th x-text="h"></th></template></tr>
+            <template x-for="(r, i) in data.rows" :key="i"><tr><template x-for="(v, j) in r.cells" :key="j"><td x-text="v"></td></template></tr></template></table></div></div></div>
     </template>
 
     <!-- ===== knowledge ===== -->
@@ -345,8 +331,8 @@
         <div class="row" style="margin:0"><button class="btn" @click="auditExport()">Export CSV</button><button class="btn primary" @click="auditVerifyRun()">Verify integrity</button></div></div>
         <div class="banner" :class="auditVerify && !auditVerify.ok ? 'err' : ''" x-show="auditVerify" x-text="auditVerify ? (auditVerify.ok ? ('✓ Chain intact (' + auditVerify.chain.events + ' events) and ' + auditVerify.seals.length + ' case seal(s) verified') : ('✗ ' + (auditVerify.chain.first_broken ? 'chain broken at line ' + auditVerify.chain.first_broken.line + ': ' + auditVerify.chain.first_broken.reason : 'seal broken: ' + auditVerify.first_broken_seal.case_id))) : ''"></div>
         <div class="card"><div class="card-body"><div class="row" style="margin:0">
-          <select class="input" x-model="auditF.user"><option value="">All actors</option><template x-for="u in users" :key="u.user_id"><option :value="u.user_id" x-text="u.name"></option></template><option value="agent.orchestrator">Orchestrator</option><option value="agent.retrieval">Data Retrieval</option><option value="agent.reconciliation">Reconciliation</option><option value="agent.recommendation">Recommendation</option><option value="agent.execution">Execution</option><option value="agent.communications">Communications</option><option value="sys.prebill">Pre-bill</option><option value="sys.verifier">Verifier</option></select>
-          <select class="input" x-model="auditF.persona"><option value="">All personas</option><option value="CSR">CSR</option><option value="DRI">DRI</option><option value="FINANCE">Finance</option><option value="AGENT">Agents</option><option value="SYSTEM">System</option></select>
+          <select class="input" x-model="auditF.user"><option value="">All actors</option><template x-for="u in users" :key="u.user_id"><option :value="u.user_id" x-text="u.name"></option></template><option value="agent.orchestrator">Orchestrator</option><option value="agent.retrieval">Data Retrieval</option><option value="agent.reconciliation">Reconciliation</option><option value="agent.recommendation">Recommendation</option><option value="sys.prebill">Pre-bill</option></select>
+          <select class="input" x-model="auditF.persona"><option value="">All personas</option><option value="CSR">CSR</option><option value="DRI">DRI</option><option value="AGENT">Agents</option><option value="SYSTEM">System</option></select>
           <select class="input" x-model="auditF.action"><option value="">All actions</option><template x-for="a in data.actions" :key="a"><option :value="a" x-text="a"></option></template></select>
           <input class="input" placeholder="Case, e.g. TB-1001" x-model="auditF.case">
           <select class="input" x-model="auditF.scenario"><option value="">All scenarios</option><template x-for="s in scenarios" :key="s.id"><option :value="s.id" x-text="s.id"></option></template></select>

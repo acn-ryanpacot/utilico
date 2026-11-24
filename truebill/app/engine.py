@@ -21,22 +21,23 @@ from .workflow import CaseMixin
 GUIDE = [
     ("Jump to 4 Nov 09:40. The Harbourline dispute (CASE-300276) arrives and the Orchestrator opens a REMEDIATE case.", "jump", "2026-11-04 09:40"),
     ("Agent activity streams: five retrieval lanes in parallel, then reconciliation. The packet is ready with R1-R4 all fired.", "agents", None),
-    ("Maya (CSR) confirms triage. Daniel (DRI) approves Prorate - the recommended option.", "act", ["TRIAGE", "AWAITING_DRI"]),
-    ("Aisha (Finance) approves the $1,436.50 reversal of revenue already posted to the GL.", "act", ["PENDING_FINANCE"]),
-    ("Daniel approves the plan. The Execution agent runs each approved step and its check; the verifier passes.", "act", ["PLAN_APPROVAL"]),
-    ("The four outputs appear (Jira BILL-NEW-1147) and the consistency check passes.", "agents", None),
-    ("Daniel approves the outputs. Maya sends the customer summary. Daniel closes and seals the case.", "act", ["OUTPUT_APPROVAL", "READY_FOR_CSR", "RESOLVED"]),
+    ("Maya (CSR) checks the evidence and customer contact and confirms triage.", "act", ["TRIAGE"]),
+    ("Daniel (DRI) approves Prorate - the $1,436.50 credit. His decision is final: the case is APPROVED and sealed.", "act", ["AWAITING_DRI"]),
     ("Jump to 9 Nov 15:30. The regulatory complaint opens a linked REGULATORY_RESPONSE case; R4 is now High (period 2026-10 closed on 6 Nov).", "jump", "2026-11-09 15:30"),
-    ("The regulator response is drafted from the sealed packet; Daniel approves the regulatory content and the case is sealed.", "act", ["TRIAGE", "AWAITING_DRI", "OUTPUT_APPROVAL", "READY_FOR_CSR", "RESOLVED"]),
-    ("The KPI tiles update: detection, citations, consistency, packet time and the Day-30 gate.", "done", None),
+    ("The agents re-assemble the packet from the sealed case; Maya confirms triage and Daniel approves the response - sealed.", "act", ["TRIAGE", "AWAITING_DRI"]),
+    ("The KPI tiles update: detection, citations, packet time and the Day-30 gate.", "done", None),
 ]
 
 
+STATE_VERSION = 3          # 3 = process ends at the DRI's decision; CSR account lookup
+
+
 def new_state(ds_id, sc_id, events):
-    return {"dataset_id": ds_id, "scenario_id": sc_id, "created_at": now_utc(), "clock": SCENARIOS[sc_id]["start"], "events": events,
+    return {"version": STATE_VERSION, "dataset_id": ds_id, "scenario_id": sc_id, "created_at": now_utc(), "clock": SCENARIOS[sc_id]["start"], "events": events,
             "timeline": {"playing": False, "speed": 1.0, "pause_for_humans": True, "paused_reason": None, "target": None},
-            "toggles": {"followup": True, "stale_mdm": False, "inject_failure": False, "autopilot": False},
-            "cases": {}, "case_seq": 0, "bills": {}, "unissued": [], "runs": [], "prevented": [], "backscan_sent": [], "banner": None,
+            "toggles": {"followup": True, "stale_mdm": False, "autopilot": False},
+            "cases": {}, "case_seq": 0, "lookup_seq": 0, "bills": {}, "unissued": [], "runs": [], "prevented": [], "approved": [],
+            "backscan_sent": [], "banner": None,
             "guide": None, "last_event_real": None}
 
 
@@ -57,6 +58,16 @@ class Session(TimelineMixin, PrebillMixin, CaseMixin):
     # ---- persistence ------------------------------------------------------------------------------------
     def _load(self):
         st = read_json(os.path.join(self.folder, "state.json")) if self.folder else None
+        if st and st.get("version") != STATE_VERSION and self.folder:
+            # state from an earlier workflow version (execution / Finance / outputs) - start this scenario afresh
+            for sub in ("sandbox", "outputs"):
+                shutil.rmtree(os.path.join(self.folder, sub), ignore_errors=True)
+            for f in ("state.json", "evidence.jsonl"):
+                try:
+                    os.remove(os.path.join(self.folder, f))
+                except OSError:
+                    pass
+            st = None
         if not st:
             st = new_state(self.ds.id, self.sc_id, build_events(self.ds, self.sc_id, self.cfg.rules()))
         st["timeline"]["playing"] = False          # never resume playing after a restart
@@ -180,9 +191,6 @@ class Session(TimelineMixin, PrebillMixin, CaseMixin):
             self.log(user_id, "STALE_FEED_TOGGLED", "connector", "MDM", after={"stale": bool(value), "lag_minutes": self.freshness()["lags"]["MDM"]})
             if not value and self.state.get("banner", {}) and (self.state["banner"] or {}).get("kind") == "stale":
                 self.state["banner"] = {"kind": "info", "text": "MDM feed fresh again - step or play the timeline to process the blocked bill run."}
-        elif name == "inject_failure":
-            if value:
-                self.log(user_id, "FAILURE_INJECTED", "demo", "next_step", after={"armed": True})
         elif name == "autopilot" and value:
             self.kick_autopilot()
         self.save()
@@ -324,9 +332,7 @@ class Engine:
             if not case or not case.get("seal") or case["seal"]["case_hash"] != (e.get("after") or {}).get("case_hash"):
                 continue          # superseded by a reset - the sealed event stays in the chain
             h = s.case_hash(case, upto_event=e["event_id"])
-            files_ok = all(sha256_text(open(f["path"], encoding="utf-8").read()) == f["sha256"] if f.get("path") and os.path.exists(f["path"]) else True
-                           for f in case["outputs"]["files"].values())
-            ok = h["case_hash"] == case["seal"]["case_hash"] and files_ok
+            ok = h["case_hash"] == case["seal"]["case_hash"]
             seals.append({"case_id": case["case_id"], "dataset_id": e["dataset_id"], "scenario_id": e["scenario_id"], "ok": ok})
             if not ok and broken is None:
                 broken = {"case_id": case["case_id"], "reason": "case_hash does not match the sealed audit events, facts and outputs"}

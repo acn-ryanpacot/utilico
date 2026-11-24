@@ -56,27 +56,7 @@ class RecommendationOut(BaseModel):
     rule_set_version: str
 
 
-class PlanStep(BaseModel):
-    seq: int
-    step: Literal["CORRECT_PREMISE_REFERENCE", "REPROCESS_INTEGRATION_MESSAGE", "STOP_SA", "ZERO_POST_DISCONNECT_READS",
-                  "REGENERATE_DRAFT_BILL", "CANCEL_DRAFT_BILL", "CLOSE_TODO", "CREATE_CREDIT_MEMO", "ADD_CRM_NOTE"]
-    params: dict[str, Any]
-    check: str
-
-
-class PlanOut(BaseModel):
-    option: str
-    steps: list[PlanStep]
-    fact_ids: list[str] = []
-
-
-class ExecutionOut(BaseModel):
-    status: Literal["DONE", "STEP_FAILED"]
-    explanation: str
-    fact_ids: list[str] = []
-
-
-class CommunicationsOut(BaseModel):
+class CommunicationsOut(BaseModel):          # dormant: output drafting is switched off
     customer_summary: Optional[str] = None
     executive_brief: Optional[str] = None
     jira_ticket: Optional[str] = None

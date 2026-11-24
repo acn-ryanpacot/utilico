@@ -1,14 +1,11 @@
-"""Agent tools (prompt §11-§12). Reads go through the point-in-time view + sandbox; every record returned becomes
-an evidence fact (deduplicated per case) and comes back with its fact_id so the agent can cite it. Agents never
-calculate money - `calculate` and `project_exposure` do. Sandbox-write tools belong to the Execution agent only and
-are admitted one at a time by the ExecGuard (next approved step only).
+"""Agent tools. Reads go through the point-in-time view; every record returned becomes an evidence fact
+(deduplicated per case) and comes back with its fact_id so the agent can cite it. Agents never calculate money -
+`calculate` and `project_exposure` do. There are no write tools: the process ends at the DRI's decision.
 """
 from ..calculator import draft_correction, issued_credit, project_exposure
-from ..datasource import (F_BILL, F_CRM, F_GL, F_MEMO, F_MSG, F_MTR, F_NOTE, F_PER, F_READ, F_SA, F_TODO, F_WO, F_XW,
-                          SYSTEM_OF_FILE)
-from ..pit import resolve_premise
+from ..datasource import F_BILL, F_CRM, F_GL, F_MSG, F_MTR, F_PER, F_READ, F_SA, F_TODO, F_WO, F_XW, SYSTEM_OF_FILE
 from ..rules import fired, near_matches, probable_cause, run_rules, s_codes
-from ..util import D, add_days, day_range, f2, money
+from ..util import D, day_range, f2
 
 
 class ToolError(Exception):
@@ -35,26 +32,13 @@ SPECS = {
     "calculate": "Deterministic money: draft correction or issued-bill credit",
     "project_exposure": "Deterministic projected exposure this cycle (ADVANCE)",
     "search_knowledge": "Similar past cases (context only)",
-    "get_case_packet": "The approved case packet (Communications)",
-    "CORRECT_PREMISE_REFERENCE": "Sandbox: correct an OMS premise reference",
-    "REPROCESS_INTEGRATION_MESSAGE": "Sandbox: reprocess an integration message",
-    "STOP_SA": "Sandbox: stop an SA at a date",
-    "ZERO_POST_DISCONNECT_READS": "Sandbox: zero post-disconnect reads (read rule)",
-    "REGENERATE_DRAFT_BILL": "Sandbox: regenerate a draft bill",
-    "CANCEL_DRAFT_BILL": "Sandbox: cancel a draft bill",
-    "CLOSE_TODO": "Sandbox: close a To Do",
-    "CREATE_CREDIT_MEMO": "Sandbox: create a credit memo",
-    "ADD_CRM_NOTE": "Sandbox: add a CRM note",
-    "check_step": "Run the check of an executed step",
 }
 READ_TOOLS = ["get_work_orders", "get_integration_messages", "get_todos", "get_service_agreement", "get_bills", "get_daily_reads",
               "get_meter", "get_crm_cases", "get_gl_lines", "get_gl_period", "find_similar_premises"]
-STEP_TOOLS = ["CORRECT_PREMISE_REFERENCE", "REPROCESS_INTEGRATION_MESSAGE", "STOP_SA", "ZERO_POST_DISCONNECT_READS",
-              "REGENERATE_DRAFT_BILL", "CANCEL_DRAFT_BILL", "CLOSE_TODO", "CREATE_CREDIT_MEMO", "ADD_CRM_NOTE"]
 
 
 def specs(names):
-    return [{"name": n, "description": SPECS[n], "input_schema": {"type": "object"}} for n in names]
+    return [{"name": n, "description": SPECS.get(n, n), "input_schema": {"type": "object"}} for n in names]
 
 
 def pick(row, keys):
@@ -282,164 +266,6 @@ def t_get_case_packet(ctx, a):
     return ctx.s.packet(ctx.case), "packet for %s" % ctx.case["case_id"]
 
 
-# ---- sandbox step tools (Execution agent only) + checks ---------------------------------------------
-def _sb(ctx):
-    return ctx.s.sandbox
-
-
-def s_correct_premise(ctx, p):
-    v = ctx.view()
-    wo = v.wos[p["wo_id"]]
-    _sb(ctx).set_row(F_WO, "wo_id", p["wo_id"], dict({k: v2 for k, v2 in wo.items() if not k.startswith("_")}, oms_premise_id=p["to"]),
-                     ctx.case["case_id"], "CORRECT_PREMISE_REFERENCE", ctx.s.clock)
-    return "WO %s premise %s → %s" % (p["wo_id"], p["from"], p["to"])
-
-
-def c_correct_premise(ctx, p):
-    v = ctx.view()
-    wo = v.wos.get(p["wo_id"]) or {}
-    ok = wo.get("oms_premise_id") == p["to"] and resolve_premise(v, p["to"], ctx.case["window"]["disconnect_date"]) is not None
-    return ok, "Does %s now resolve through the crosswalk (%s)? %s" % (p["wo_id"], p["to"], "yes" if ok else "no")
-
-
-def s_reprocess(ctx, p):
-    v = ctx.view()
-    m = v.msgs.get(p["msg_id"])
-    if not m:
-        raise ToolError("message %s not visible" % p["msg_id"])
-    _sb(ctx).set_row(F_MSG, "msg_id", p["msg_id"], dict({k: v2 for k, v2 in m.items() if not k.startswith("_")}, status="SUCCESS",
-                     processed_at=ctx.s.clock, error_message="Reprocessed in sandbox by %s" % ctx.case["case_id"]),
-                     ctx.case["case_id"], "REPROCESS_INTEGRATION_MESSAGE", ctx.s.clock)
-    return "%s reprocessed" % p["msg_id"]
-
-
-def c_reprocess(ctx, p):
-    st = (ctx.view().msgs.get(p["msg_id"]) or {}).get("status")
-    return st == "SUCCESS", "Is the sandbox status of %s SUCCESS? %s (%s)" % (p["msg_id"], "yes" if st == "SUCCESS" else "no", st)
-
-
-def s_stop_sa(ctx, p):
-    v = ctx.view()
-    sa = v.sas[p["sa_id"]]
-    _sb(ctx).set_row(F_SA, "sa_id", p["sa_id"], dict({k: v2 for k, v2 in sa.items() if not k.startswith("_")}, sa_status="STOPPED",
-                     stop_date=p["stop_date"], stop_processed_at=ctx.s.clock), ctx.case["case_id"], "STOP_SA", ctx.s.clock)
-    return "%s stopped at %s" % (p["sa_id"], p["stop_date"])
-
-
-def c_stop_sa(ctx, p):
-    sa = ctx.view().sas.get(p["sa_id"]) or {}
-    ok = sa.get("sa_status") == "STOPPED" and sa.get("stop_date") == p["stop_date"]
-    return ok, "Is %s STOPPED with stop date %s? %s" % (p["sa_id"], p["stop_date"], "yes" if ok else "no")
-
-
-def s_zero_reads(ctx, p):
-    _sb(ctx).add_read_rule(p["meter"], p["from"], p.get("to"), ctx.case["case_id"], "ZERO_POST_DISCONNECT_READS", ctx.s.clock)
-    return "read rule %s from %s to %s" % (p["meter"], p["from"], p.get("to") or "open")
-
-
-def c_zero_reads(ctx, p):
-    v = ctx.view()
-    active = any(r["meter"] == p["meter"] and r["from_date"] == p["from"] and r.get("to_date") == p.get("to") for r in v.read_rules)
-    reads = v.reads_by_meter.get(p["meter"], {})
-    win = [r for d, r in reads.items() if d >= p["from"] and (not p.get("to") or d <= p["to"])]
-    ok = active and all(D(r["kwh"]) == 0 and r["read_quality"] == "CORRECTED" for r in win)
-    return ok, "Read rule active and %d visible read(s) in the window are 0 and CORRECTED? %s" % (len(win), "yes" if ok else "no")
-
-
-def _correction(ctx, bill_id):
-    out, _ = t_calculate(ctx, {"kind": "draft", "bill_id": bill_id})
-    return out
-
-
-def s_regenerate(ctx, p):
-    base = ctx.view(sandbox=False)
-    b = base.bills[p["bill_id"]]
-    corr = _correction(ctx, p["bill_id"])
-    row = {k: v for k, v in b.items() if not k.startswith("_")}
-    row.update(total_amount="%.2f" % corr["after"], bill_status="REGENERATED", original_total="%.2f" % corr["before"],
-               reduction="%.2f" % corr["reduction"])
-    if corr.get("period_end_after"):
-        row["period_end"] = corr["period_end_after"]
-        row["bill_type"] = "FINAL"
-    _sb(ctx).set_row(F_BILL, "bill_id", p["bill_id"], row, ctx.case["case_id"], "REGENERATE_DRAFT_BILL", ctx.s.clock)
-    return "%s regenerated %s → %s" % (p["bill_id"], corr["before"], corr["after"])
-
-
-def c_regenerate(ctx, p):
-    b = ctx.view().bills.get(p["bill_id"]) or {}
-    corr = _correction(ctx, p["bill_id"])
-    ok = b.get("bill_status") == "REGENERATED" and money(b.get("total_amount")) == money(D(corr["before"]) - D(corr["reduction"]))
-    return ok, "Total %s = original %s − reduction %s? %s" % (b.get("total_amount"), corr["before"], corr["reduction"], "yes" if ok else "no")
-
-
-def s_cancel(ctx, p):
-    base = ctx.view(sandbox=False)
-    b = base.bills[p["bill_id"]]
-    row = {k: v for k, v in b.items() if not k.startswith("_")}
-    row.update(bill_status="CANCELLED", original_total=b["total_amount"], total_amount="0.00")
-    _sb(ctx).set_row(F_BILL, "bill_id", p["bill_id"], row, ctx.case["case_id"], "CANCEL_DRAFT_BILL", ctx.s.clock)
-    return "%s cancelled (was %s)" % (p["bill_id"], b["total_amount"])
-
-
-def c_cancel(ctx, p):
-    st = (ctx.view().bills.get(p["bill_id"]) or {}).get("bill_status")
-    return st == "CANCELLED", "Is draft %s cancelled? %s" % (p["bill_id"], "yes" if st == "CANCELLED" else "no")
-
-
-def s_close_todo(ctx, p):
-    x = ctx.view().todos.get(p["todo_id"])
-    if not x:
-        raise ToolError("To Do %s not visible" % p["todo_id"])
-    _sb(ctx).set_row(F_TODO, "todo_id", p["todo_id"], dict({k: v for k, v in x.items() if not k.startswith("_")}, status="COMPLETE",
-                     assigned_to="agent.execution"), ctx.case["case_id"], "CLOSE_TODO", ctx.s.clock)
-    return "%s closed" % p["todo_id"]
-
-
-def c_close_todo(ctx, p):
-    st = (ctx.view().todos.get(p["todo_id"]) or {}).get("status")
-    return st == "COMPLETE", "Is %s COMPLETE? %s" % (p["todo_id"], "yes" if st == "COMPLETE" else "no")
-
-
-def s_credit_memo(ctx, p):
-    memo_id = "CM-%s" % ctx.case["case_id"]
-    _sb(ctx).set_row(F_MEMO, "memo_id", memo_id, {"memo_id": memo_id, "account_id": ctx.case["account_id"], "bill_ids": " ".join(p["bill_ids"]),
-                     "amount": "%.2f" % float(p["amount"]), "accounting_period": p["period"], "created_at": ctx.s.clock,
-                     "case_id": ctx.case["case_id"]}, ctx.case["case_id"], "CREATE_CREDIT_MEMO", ctx.s.clock)
-    return "%s %s to period %s" % (memo_id, p["amount"], p["period"])
-
-
-def c_credit_memo(ctx, p):
-    v = ctx.view()
-    m = v.memos.get("CM-%s" % ctx.case["case_id"]) or {}
-    calc, _ = t_calculate(ctx, {"kind": "credit"})
-    per = v.periods.get(p["period"], {})
-    ok = bool(m) and money(m.get("amount")) == money(calc["credit"]) and per.get("status") == "OPEN" and p["period"] == v.current_period()
-    return ok, "Memo %s = calculated credit %s and period %s OPEN? %s" % (m.get("amount"), calc["credit"], p["period"], "yes" if ok else "no")
-
-
-def s_crm_note(ctx, p):
-    note_id = "NOTE-%s" % ctx.case["case_id"]
-    _sb(ctx).set_row(F_NOTE, "note_id", note_id, {"note_id": note_id, "account_id": p["account_id"], "text": p["text"], "created_at": ctx.s.clock,
-                     "case_id": ctx.case["case_id"]}, ctx.case["case_id"], "ADD_CRM_NOTE", ctx.s.clock)
-    return "%s added" % note_id
-
-
-def c_crm_note(ctx, p):
-    ok = "NOTE-%s" % ctx.case["case_id"] in ctx.view().notes
-    return ok, "Does the CRM note exist? %s" % ("yes" if ok else "no")
-
-
-STEPS = {
-    "CORRECT_PREMISE_REFERENCE": (s_correct_premise, c_correct_premise),
-    "REPROCESS_INTEGRATION_MESSAGE": (s_reprocess, c_reprocess),
-    "STOP_SA": (s_stop_sa, c_stop_sa),
-    "ZERO_POST_DISCONNECT_READS": (s_zero_reads, c_zero_reads),
-    "REGENERATE_DRAFT_BILL": (s_regenerate, c_regenerate),
-    "CANCEL_DRAFT_BILL": (s_cancel, c_cancel),
-    "CLOSE_TODO": (s_close_todo, c_close_todo),
-    "CREATE_CREDIT_MEMO": (s_credit_memo, c_credit_memo),
-    "ADD_CRM_NOTE": (s_crm_note, c_crm_note),
-}
 READ = {"get_work_orders": t_get_work_orders, "get_integration_messages": t_get_integration_messages, "get_todos": t_get_todos,
         "get_service_agreement": t_get_service_agreement, "get_bills": t_get_bills, "get_daily_reads": t_get_daily_reads,
         "get_meter": t_get_meter, "get_crm_cases": t_get_crm_cases, "get_gl_lines": t_get_gl_lines, "get_gl_period": t_get_gl_period,

@@ -1,4 +1,10 @@
-"""KPIs and the Day-30 gate (prompt §16), calculated from the audit log, the evidence store and case state."""
+"""KPIs and the Day-30 gate, calculated from the audit log, the evidence store and case state.
+
+The process ends at the DRI's decision, so money is counted at approval: $ prevented = approved PREVENT
+reductions, $ remediated = approved REMEDIATE credits, $ exposure addressed = approved ADVANCE projections.
+Citation coverage = agent statements (rule explanations, recommendation rationales) citing existing facts.
+CSR lookups that found nothing (NO_ISSUE) are not cases and are left out.
+"""
 import statistics
 from datetime import datetime
 
@@ -25,42 +31,53 @@ def expected_codes(cfg, ds_id, sc_id, followup_on):
     return sorted({c["case"] for c in e.get("cases", [])})
 
 
+def citation_stats(s, cases):
+    total = cited = 0
+    for c in cases:
+        stmts = [e["fact_ids"] for e in (c.get("reconciliation") or {}).get("explanations", [])]
+        if c.get("recommendation"):
+            stmts.append(c["recommendation"].get("fact_ids") or [])
+        for ids in stmts:
+            total += 1
+            if ids and all(f in s.evidence.by_id for f in ids):
+                cited += 1
+    return total, cited
+
+
 def kpis(s):
-    cases = list(s.state["cases"].values())
+    cases = [c for c in s.state["cases"].values() if c["state"] != "NO_ISSUE"]
     codes = s.ds.case_codes
     packet = [x for x in (_secs(c["timings"].get("new_real"), c["timings"].get("recommended_real")) for c in cases) if x is not None]
     conflict = [x for x in (_secs(c["timings"].get("event_real"), c["timings"].get("reconciled_real")) for c in cases) if x is not None]
     exp = expected_codes(s.cfg, s.ds.id, s.sc_id, s.state["toggles"]["followup"])
-    if s.sc_id == "BACKSCAN_2026-11-10" and not cases:
-        exp_active = []
-    else:
-        exp_active = exp
+    pipeline_cases = [c for c in cases if not c.get("lookup")]
+    exp_active = [] if (s.sc_id == "BACKSCAN_2026-11-10" and not pipeline_cases) else exp
     detected = sorted({codes.get(c["account_id"]) for c in cases if codes.get(c["account_id"]) in exp_active})
     fp = [c for c in cases if codes.get(c["account_id"]) not in exp]
-    factual = cited = 0
-    with_out = [c for c in cases if c.get("outputs") and c["outputs"].get("consistency")]
-    for c in with_out:
-        factual += c["outputs"]["citations"]["factual"]
-        cited += c["outputs"]["citations"]["cited"]
+    total, cited = citation_stats(s, cases)
     green = [c for c in cases if (c.get("triage") or {}).get("would_auto_approve") and c["triage"].get("agreed") is not None]
-    slas = [s.sla_view(c)["worst"] for c in cases if c["state"] not in ("SEALED", "CANCELLED", "RESOLVED")]
-    prevented = sum((D(p["amount"]) for p in s.state["prevented"]), D(0))
-    remediated = sum((D(m["amount"]) for m in s.view().memos.values()), D(0))
-    exposure = sum((D(c["amount"]) for c in cases if c["type"] == "ADVANCE" and c["state"] not in ("SEALED", "CANCELLED")), D(0))
-    bills = s.state["bills"].values()
+    slas = [s.sla_view(c)["worst"] for c in cases if c["state"] not in ("APPROVED", "REJECTED")]
+    appr = s.state.get("approved", [])
+
+    def total_of(kind):
+        return f2(sum((D(a["amount"]) for a in appr if a["kind"] == kind), D(0)))
+    exposure_open = sum((D(c["amount"]) for c in cases if c["type"] == "ADVANCE" and c["state"] not in ("APPROVED", "REJECTED")), D(0))
+    bills = list(s.state["bills"].values())
     out = {
         "packet_seconds": {"median": round(statistics.median(packet), 3) if packet else None, "max": round(max(packet), 3) if packet else None, "n": len(packet)},
         "conflict_seconds": {"median": round(statistics.median(conflict), 3) if conflict else None, "max": round(max(conflict), 3) if conflict else None},
         "detection_rate": (len(detected) / len(exp_active)) if exp_active else None, "expected": exp_active, "detected": detected,
         "false_positive_rate": (len(fp) / len(cases)) if cases else 0.0, "false_positives": [c["case_id"] for c in fp],
-        "citation_coverage": (cited / factual) if factual else None, "factual_sentences": factual,
-        "output_consistency": (sum(1 for c in with_out if c["outputs"]["consistency"]["pass"]) / len(with_out)) if with_out else None,
+        "citation_coverage": (cited / total) if total else None, "agent_statements": total,
         "triage_agreement": (sum(1 for c in green if c["triage"]["agreed"]) / len(green)) if green else None, "green_cases": len(green),
         "sla_at_risk": slas.count("AT_RISK"), "sla_breached": slas.count("BREACHED"),
-        "prevented": f2(prevented), "remediated": f2(remediated), "projected_exposure_open": f2(exposure),
-        "bills": {k: sum(1 for b in bills if (b.get("outcome") == "HELD" if k == "held" else b.get("status") == k.upper()))
-                  for k in ("held", "suppressed", "regenerated", "released")},
-        "bills_passed": sum(1 for b in bills if b.get("outcome") == "PASSED"),
+        "prevented": total_of("prevented"), "remediated": total_of("remediated"), "exposure_addressed": total_of("exposure_addressed"),
+        "projected_exposure_open": f2(exposure_open),
+        "approved": sum(1 for c in cases if c["state"] == "APPROVED"), "rejected": sum(1 for c in cases if c["state"] == "REJECTED"),
+        "bills": {"held": sum(1 for b in bills if b.get("outcome") == "HELD"), "held_on_existing_case": sum(1 for b in bills if b.get("attached")),
+                  "passed": sum(1 for b in bills if b.get("outcome") == "PASSED")},
+        "lookups": sum(1 for c in s.state["cases"].values() if c.get("lookup")),
+        "lookups_no_issue": sum(1 for c in s.state["cases"].values() if c["state"] == "NO_ISSUE"),
         "cases": len(cases),
         "by_state": _count(c["state"] for c in cases), "by_priority": _count(c["priority"] for c in cases),
         "by_triage": _count((c.get("triage") or {}).get("colour", "-") for c in cases),

@@ -225,29 +225,7 @@ def recommendation(messages, tools, b):
                       "rationale": rationale, "fact_ids": fids, "rule_set_version": res["rule_set_version"]}}
 
 
-# ---- Execution: propose the plan (server validates it), then run approved steps one at a time ---------
-@policy("agent.execution")
-def execution(messages, tools, b):
-    if b["mode"] == "plan":
-        return {"final": {"option": b["option"], "steps": b["playbook"], "fact_ids": []}}
-    done = tool_results(messages)
-    for n, i, r in done:
-        if n == "check_step" and not r.get("passed"):
-            return {"final": {"status": "STEP_FAILED", "explanation": "Step %d (%s) failed its check: %s" % (r["seq"], r["step"], r["check_result"])}}
-        if n in b["step_names"] and r.get("ok") is False:
-            return {"final": {"status": "STEP_FAILED", "explanation": "Step %s failed: %s" % (n, r.get("error"))}}
-    executed = {r.get("seq") for n, _, r in done if n != "check_step"}
-    checked = {i["seq"] for n, i, _ in done if n == "check_step"}
-    steps = [s for s in b["steps"] if s["status"] != "DONE"]
-    for s in steps:
-        if s["seq"] not in executed:
-            return {"tool_calls": [call(s["step"], len(done) + 1, **s["params"])]}
-        if s["seq"] not in checked:
-            return {"tool_calls": [call("check_step", len(done) + 1, seq=s["seq"])]}
-    return {"final": {"status": "DONE", "explanation": "All %d approved step(s) executed and checked." % len(steps)}}
-
-
-# ---- Communications: outputs from the approved packet ----------------------------------------------------
+# ---- Communications (dormant: output drafting is switched off; kept for later) -------- ----------------------------------------------------
 @policy("agent.communications")
 def communications(messages, tools, b):
     done = tool_results(messages)

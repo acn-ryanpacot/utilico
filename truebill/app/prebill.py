@@ -1,7 +1,6 @@
 """Pre-bill check and bill-run simulator (sys.prebill), disconnect follow-ups, disputes and back-scan intake
 (prompt §6 freshness, §10)."""
 from . import backscan as BS
-from .calculator import draft_correction
 from .datasource import F_BILL
 from .pit import STOP_SUBTYPES, View, disconnect_window, resolve_premise
 from .rules import near_matches, run_rules
@@ -65,65 +64,27 @@ class PrebillMixin:
                      "suggested_premise": suggested, "match_status": match, "res": res, "window": win}, **kw)
 
     def open_case_for(self, key_account, wo_id):
+        """The case for this account and root-cause disconnect - open or already decided (one case per disconnect)."""
         for c in self.state["cases"].values():
-            if c["account_id"] == key_account and c["wo_id"] == wo_id and c["state"] not in ("SEALED", "CANCELLED"):
+            if c["account_id"] == key_account and c["wo_id"] == wo_id and c["state"] != "NO_ISSUE":
                 return c
         return None
 
     # ---- BILL_READY ----------------------------------------------------------------------------------
     async def bill_run(self, ev):
+        """Pre-bill checks on every draft of the run. Nothing is corrected automatically any more (the process ends
+        at the DRI's decision), so a draft whose disconnect already has a case - open or decided - is held and
+        attached to that case instead of opening a second one."""
         run_ts = ev["ref"]
         drafts = sorted([b for b in self.ds.table(F_BILL) if b["bill_run_at"] == run_ts], key=lambda b: b["bill_id"])
         ids = {b["bill_id"] for b in drafts}
         self.log("sys.prebill", "BILL_RUN_STARTED", "bill_run", run_ts, after={"drafts": len(drafts)})
         unissued = set(self.state["unissued"]) | ids
-        base = View(self.ds, self.clock, None, unissued)
-        # 1) sandbox effects of earlier corrections: SUPPRESS / REGENERATE before evaluation
-        v = self.view(drafts=unissued)
-        counts = {"held": 0, "passed": 0, "suppressed": 0, "regenerated": 0}
-        suppressed = set()
-        for b in drafts:
-            sa = v.sas.get(b["sa_id"])
-            creator = self.sandbox.creator("ccb_service_agreements.csv", b["sa_id"]) if sa else None
-            case = self.state["cases"].get(creator) if creator else None
-            if not (sa and case and sa["sa_status"] == "STOPPED" and sa.get("stop_date")):
-                case = self._read_rule_case(v, b)
-                if not case:
-                    continue
-            stop = sa.get("stop_date") if sa["sa_status"] == "STOPPED" else None
-            total = D(b["total_amount"])
-            if stop and stop < b["period_start"]:
-                self.sandbox.set_row(F_BILL, "bill_id", b["bill_id"], dict(b, bill_status="CANCELLED", original_total=b["total_amount"], total_amount="0.00"),
-                                     case["case_id"], "BILL_RUN_SUPPRESS", self.clock)
-                self.state["bills"][b["bill_id"]] = {"run_ts": run_ts, "status": "SUPPRESSED", "before": f2(total), "after": 0.0, "case_id": case["case_id"],
-                                                     "account_id": sa["account_id"]}
-                self.credit_prevented(case["case_id"], b["bill_id"], total, "suppressed at bill run")
-                self.log("sys.prebill", "BILL_SUPPRESSED", "bill", b["bill_id"], case["case_id"], {"total": f2(total)}, {"total": 0.0},
-                         "SA stopped %s before the billing period (overlay by %s)" % (stop, case["case_id"]))
-                suppressed.add(b["bill_id"])
-                counts["suppressed"] += 1
-                continue
-            bsa = base.sas.get(b["sa_id"]) or sa
-            corr = draft_correction(base, case["subtype"], bsa, base.bills[b["bill_id"]], case["window"], case["meter_id"], stop_date=stop)
-            if corr["action"] != "REGENERATE" or corr["reduction"] <= 0:
-                continue
-            row = dict(b, total_amount="%.2f" % corr["after"], bill_status="REGENERATED", original_total=b["total_amount"], reduction="%.2f" % corr["reduction"])
-            if stop and corr.get("period_end_after"):
-                row.update(period_end=stop, bill_type="FINAL")
-            self.sandbox.set_row(F_BILL, "bill_id", b["bill_id"], row, case["case_id"], "BILL_RUN_REGENERATE", self.clock)
-            self.state["bills"][b["bill_id"]] = {"run_ts": run_ts, "status": "REGENERATED", "before": corr["before"], "after": corr["after"],
-                                                 "case_id": case["case_id"], "account_id": bsa["account_id"]}
-            self.credit_prevented(case["case_id"], b["bill_id"], D(corr["reduction"]), "regenerated at bill run")
-            self.log("sys.prebill", "BILL_REGENERATED", "bill", b["bill_id"], case["case_id"], {"total": corr["before"]}, {"total": corr["after"]},
-                     "%s by %s" % ("final bill to stop date %s" % stop if stop else "read rule", case["case_id"]))
-            counts["regenerated"] += 1
-        # 2) pre-bill checks on the resulting drafts
+        counts = {"held": 0, "passed": 0, "held_on_existing_case": 0}
         v = self.view(drafts=unissued)
         unmatched = [w for w in v.completed_disconnects() if w["oms_premise_id"] not in v.xw]
         new_cases = []
         for b in drafts:
-            if b["bill_id"] in suppressed:
-                continue
             sa = v.sas.get(b["sa_id"])
             if not sa:
                 continue
@@ -141,35 +102,35 @@ class PrebillMixin:
                             ctxs.append(s)
             outcome, results = "PASSED", []
             for s in ctxs:
-                rctx = self.rule_ctx_from_seed(s, [b["bill_id"]])
-                res = run_rules(v, rctx, self.cfg.rules())
+                res = run_rules(v, self.rule_ctx_from_seed(s, [b["bill_id"]]), self.cfg.rules())
                 f = [r for r in ("R1", "R2", "R3", "R4", "PB1", "PB2", "PB3") if res[r]["fired"]]
                 blocking = [r for r in f if r in self.cfg.rules()["blocking_rules"]]
                 results.append((s, f, blocking))
                 if blocking:
                     outcome = "HELD"
             rules = sorted({r for _, f, _ in results for r in f})
-            entry = self.state["bills"].get(b["bill_id"], {"run_ts": run_ts, "before": f2(D(b["total_amount"]))})
-            entry.update(outcome=outcome, rules=rules, account_id=sa["account_id"], status="HELD" if outcome == "HELD" else entry.get("status", "PASSED"))
+            entry = {"run_ts": run_ts, "before": f2(D(b["total_amount"])), "outcome": outcome, "rules": rules, "account_id": sa["account_id"],
+                     "status": "HELD" if outcome == "HELD" else "PASSED"}
             self.state["bills"][b["bill_id"]] = entry
             if outcome == "HELD":
                 counts["held"] += 1
                 self.state["unissued"].append(b["bill_id"])
-                self.log("sys.prebill", "BILL_HELD", "bill", b["bill_id"], None, None, {"rules": rules, "total": float(D(v.bills[b["bill_id"]]["total_amount"]))})
+                self.log("sys.prebill", "BILL_HELD", "bill", b["bill_id"], None, None, {"rules": rules, "total": entry["before"]})
                 for s, f, blocking in results:
                     if not blocking:
                         continue
                     hit = self.open_case_for(s["res"]["sa"]["account_id"], s["wo_id"])
                     if hit:
                         self.attach_bill(hit, b["bill_id"])
-                        entry["case_id"] = hit["case_id"]
+                        entry["case_id"], entry["attached"] = hit["case_id"], True
+                        counts["held_on_existing_case"] += 1
                         continue
                     c = self.open_case(dict(s, bill_ids=[b["bill_id"]], draft_bill_id=b["bill_id"], run_ts=run_ts), ev)
                     entry["case_id"] = c["case_id"]
                     new_cases.append(c)
             else:
                 counts["passed"] += 1
-                self.log("sys.prebill", "BILL_PASSED", "bill", b["bill_id"], None, None, {"rules": rules, "total": float(D(v.bills[b["bill_id"]]["total_amount"]))})
+                self.log("sys.prebill", "BILL_PASSED", "bill", b["bill_id"], None, None, {"rules": rules, "total": entry["before"]})
                 for s, f, blocking in results:
                     if not f or not ({"PB1", "PB2"} & set(f)):
                         continue
@@ -183,24 +144,18 @@ class PrebillMixin:
         self.log("sys.prebill", "BILL_RUN_COMPLETED", "bill_run", run_ts, after=dict(counts, cases=[c["case_id"] for c in new_cases]))
         ev["case_id"] = ", ".join(c["case_id"] for c in new_cases) or None
 
-    def _read_rule_case(self, v, b):
-        sa = v.sas.get(b["sa_id"])
-        if not sa:
-            return None
-        meters = {v.xw[p]["mdm_meter_id"] for p in v.premises_by_sp.get(sa["ccb_sp_id"], [])}
-        for rr in v.read_rules:
-            if rr["meter"] in meters and (not rr.get("to_date") or rr["to_date"] >= b["period_start"]) and rr["from_date"] <= b["period_end"]:
-                return self.state["cases"].get(rr["case_id"])
-        return None
-
     def credit_prevented(self, case_id, bill_id, amount, how):
         self.state["prevented"].append({"case_id": case_id, "bill_id": bill_id, "amount": f2(amount), "how": how, "scenario_time": self.clock})
 
     def attach_bill(self, case, bill_id):
-        if bill_id not in case["bill_ids"]:
-            case["bill_ids"].append(bill_id)
-            self.log("agent.orchestrator", "EVENT_RECEIVED", "bill", bill_id, case["case_id"], after={"attached_to": case["case_id"]},
-                     reason="One case per account and root-cause disconnect: bill attached to the open case")
+        """A decided (sealed) case stays read-only: the held bill is recorded next to it, not inside its packet."""
+        decided = case["state"] in ("APPROVED", "REJECTED")
+        target = case.setdefault("attached_bills", []) if decided else case["bill_ids"]
+        if bill_id not in target:
+            target.append(bill_id)
+            self.log("agent.orchestrator", "EVENT_RECEIVED", "bill", bill_id, None, after={"attached_to": case["case_id"], "case_state": case["state"]},
+                     reason="One case per account and root-cause disconnect: held bill attached to %s %s" % (
+                         "decided case" if decided else "open case", case["case_id"]))
 
     # ---- DISCONNECT_COMPLETED / FOLLOWUP_DUE ---------------------------------------------------------
     def on_disconnect(self, ev):
@@ -243,7 +198,7 @@ class PrebillMixin:
         if not crm:
             return
         acc = crm["account_id"]
-        open_cases = [c for c in self.state["cases"].values() if c["account_id"] == acc and c["state"] not in ("SEALED", "CANCELLED")]
+        open_cases = [c for c in self.state["cases"].values() if c["account_id"] == acc and c["state"] not in ("APPROVED", "REJECTED", "NO_ISSUE")]
         if open_cases:
             c = open_cases[0]
             c["flags"]["dispute"] = True
@@ -253,7 +208,7 @@ class PrebillMixin:
             self.log("agent.orchestrator", "EVENT_RECEIVED", "crm_case", crm["case_id"], c["case_id"], after={"attached_to": c["case_id"], "dispute_flag": True})
             ev["case_id"] = c["case_id"]
             return
-        sealed = [c for c in self.state["cases"].values() if c["account_id"] == acc and c["state"] == "SEALED"]
+        sealed = [c for c in self.state["cases"].values() if c["account_id"] == acc and c["state"] in ("APPROVED", "REJECTED")]
         if crm["category"] == "REGULATORY_COMPLAINT" and sealed:
             link = sorted(sealed, key=lambda c: c["case_id"])[-1]
             seed = {"type": "REGULATORY_RESPONSE", "wo_id": link["wo_id"], "subtype": link["subtype"], "recorded_premise": link["recorded_premise"],

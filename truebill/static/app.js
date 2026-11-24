@@ -2,17 +2,16 @@
    enforces every permission. Live updates arrive over Server-Sent Events (fetch-based reader, so the user header
    is sent on the stream too). */
 const NAV = [
-  ['Overview', ['dashboard', 'mywork', 'timeline']],
-  ['Cases', ['cases', 'finance', 'outputs']],
+  ['Overview', ['dashboard', 'mywork', 'lookup', 'timeline']],
+  ['Cases', ['cases']],
   ['POC 1 detector', ['backscan', 'daily']],
   ['Data & assurance', ['explorer', 'knowledge', 'audit', 'selftest']],
 ];
-const LIFECYCLE = ['NEW', 'RETRIEVING', 'RECONCILING', 'RECOMMENDING', 'TRIAGE', 'AWAITING_DRI', 'PENDING_FINANCE', 'PLAN_APPROVAL',
-  'EXECUTING', 'VERIFYING', 'DRAFTING_OUTPUTS', 'OUTPUT_APPROVAL', 'READY_FOR_CSR', 'RESOLVED', 'SEALED'];
-const AGENT_STATES = ['NEW', 'RETRIEVING', 'RECONCILING', 'RECOMMENDING', 'EXECUTING', 'VERIFYING', 'DRAFTING_OUTPUTS'];
+const LIFECYCLE = ['NEW', 'RETRIEVING', 'RECONCILING', 'RECOMMENDING', 'TRIAGE', 'AWAITING_DRI', 'DECIDED'];
+const AGENT_STATES = ['NEW', 'RETRIEVING', 'RECONCILING', 'RECOMMENDING'];
 const RULE_NAMES = { R1: 'Billed after disconnect', R2: 'Estimated reads after disconnect', R3: 'Complaint without billing hold', R4: 'Disputed revenue posted',
   PB1: 'SA active despite stop', PB2: 'Integration message failed', PB3: 'ID near-match' };
-const PERSONA = { CSR: 'CSR / Billing Ops', DRI: 'DRI', FINANCE: 'Finance' };
+const PERSONA = { CSR: 'CSR / Billing Ops', DRI: 'DRI' };
 const LANES = ['OMS', 'CCB', 'MDM', 'CRM', 'GL'];
 
 function money(n) { if (n === null || n === undefined || n === '') return '—'; const v = Number(n); return (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -24,7 +23,8 @@ function trueBill() {
     users: [], agent: null, knowledgeMode: null, me: null, perms: {}, labels: {}, datasets: [], scenarios: [], presets: [],
     dsId: 'dataset_A_with_errors', scId: 'DISPUTE_REPLAY', route: { screen: 'dashboard', id: null }, nav: NAV,
     st: null, data: {}, caseData: null, toastMsg: null, toastErr: false, labelsOn: false, feedFilter: 'all',
-    auditF: {}, auditVerify: null, selftest: null, selftestRunning: false, explorer: { file: 'oms_work_orders.csv', mode: 'base', q: '', page: 0 },
+    auditF: {}, auditVerify: null, selftest: null, selftestRunning: false, explorer: { file: 'oms_work_orders.csv', q: '', page: 0 },
+    lookupAcc: '', lookupResult: null, lookupBusy: false,
     knowledgeQ: 'Commercial disconnect not synced; full cycle billed', knowledgeColl: 'case_history', dailyAsOf: '2026-11-02',
     form: {}, sse: null, sseOn: false, refreshTimer: null, busy: false, theme: 'auto', guideHidden: false,
     LIFECYCLE, LANES, RULE_NAMES, PERSONA, money, pct, hhmm,
@@ -46,6 +46,7 @@ function trueBill() {
       return j;
     },
     toast(msg, err) { this.toastMsg = msg; this.toastErr = !!err; clearTimeout(this._tt); this._tt = setTimeout(() => { this.toastMsg = null; }, err ? 7000 : 3500); },
+    uname(id) { const u = this.users.find(x => x.user_id === id); return u ? u.name : id; },
     initials(n) { return (n || '').split(/\s+/).map(x => x[0]).join('').slice(0, 2); },
     can(screen) { return this.perms[screen] && this.perms[screen] !== '-'; },
     lvl(screen) { return this.perms[screen] || '-'; },
@@ -88,8 +89,7 @@ function trueBill() {
         else if (s === 'mywork') this.data = await this.api('/api/mywork');
         else if (s === 'cases') this.data = await this.api('/api/cases');
         else if (s === 'case') this.caseData = await this.api('/api/cases/' + encodeURIComponent(this.route.id) + (first ? '?view=1' : ''));
-        else if (s === 'finance') this.data = await this.api('/api/finance');
-        else if (s === 'outputs') this.data = await this.api('/api/outputs');
+        else if (s === 'lookup') this.data = await this.api('/api/lookup');
         else if (s === 'backscan') this.data = await this.api('/api/backscan');
         else if (s === 'daily') this.data = await this.api('/api/daily?as_of=' + this.dailyAsOf);
         else if (s === 'explorer') this.data = await this.api('/api/explorer?' + new URLSearchParams(this.explorer));
@@ -164,24 +164,29 @@ function trueBill() {
     },
     decide() {
       const k = this.form.kind || 'APPROVE_RECOMMENDED';
+      const final = { APPROVE_RECOMMENDED: 'APPROVE the recommendation', CHOOSE_OTHER: 'APPROVE another option', RELEASE_AS_IS: 'REJECT - release as-is', CANCEL_FALSE_POSITIVE: 'REJECT - cancel as a false positive' }[k];
+      if (!confirm(final + '? This decision is final: it ends and seals the case.')) return;
       this.act('DECIDE', { kind: k, option: this.form.option || 'SUPPRESS' });
     },
-    editOutput() { this.act('EDIT_OUTPUT', { name: this.form.outName, text: this.form.outText }); },
-    startEdit(name) { this.form.outName = name; this.form.outText = this.caseData.outputs.files[name].text; },
-    async download(caseId, name) {
-      try { const r = await this.api('/api/cases/' + encodeURIComponent(caseId) + '/outputs/' + name, { raw: true });
-        const url = URL.createObjectURL(await r.blob()); const a = document.createElement('a'); a.href = url; a.download = caseId + '_' + name + '.md'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000); }
-      catch (e) { this.toast(e.message, true); }
+    async runLookup() {
+      const acc = (this.lookupAcc || '').trim(); if (!acc) { this.toast('Enter an account number', true); return; }
+      this.lookupBusy = true; this.lookupResult = null;
+      try { this.lookupResult = await this.api('/api/lookup', { method: 'POST', body: { account_id: acc } }); this.load(false); }
+      catch (e) { this.lookupResult = { status: 'ERROR', message: e.message }; }
+      this.lookupBusy = false;
     },
-    stateClass(s) { return ['SEALED', 'RESOLVED'].includes(s) ? 'done' : s === 'CANCELLED' ? 'off' : AGENT_STATES.includes(s) ? 'agent' : ''; },
-    lifecycleClass(c, s) { const seen = new Set(c.history.map(h => h.to)); return s === c.state ? 'cur' : seen.has(s) ? 'done' : ''; },
+    lookupState(id) { const i = (this.data.items || []).find(x => x.case_id === id); return i ? i.state : null; },
+    stateClass(s) { return s === 'APPROVED' ? 'done' : s === 'REJECTED' ? 'bad' : s === 'NO_ISSUE' ? 'off' : AGENT_STATES.includes(s) ? 'agent' : ''; },
+    lifecycleClass(c, s) {
+      const decided = ['APPROVED', 'REJECTED', 'NO_ISSUE'].includes(c.state);
+      if (s === 'DECIDED') return decided ? 'cur' : '';
+      const seen = new Set(c.history.map(h => h.to)); return s === c.state ? 'cur' : (seen.has(s) || decided && LIFECYCLE.indexOf(s) < 6) ? 'done' : '';
+    },
+    lifecycleLabel(c, s) { return s === 'DECIDED' ? (['APPROVED', 'REJECTED', 'NO_ISSUE'].includes(c.state) ? c.state.toLowerCase().replace('_', ' ') : 'approved / rejected') : s.toLowerCase().replace(/_/g, ' '); },
     laneEntries(lane) { return (this.caseData.activity || []).filter(a => a.agent === 'agent.retrieval' && a.lane === lane); },
     otherActivity() { return (this.caseData.activity || []).filter(a => a.agent !== 'agent.retrieval').slice().reverse(); },
     fact(fid) { return (this.caseData.facts || []).find(f => f.fact_id === fid); },
-    openFact(f) {
-      const file = f.file.startsWith('sandbox') ? f.file : f.file;
-      this.explorer = { file, mode: f.kind === 'corrected' ? 'sandbox' : 'base', q: f.record_id, page: 0 }; this.go('explorer');
-    },
+    openFact(f) { this.explorer = { file: f.file, q: f.record_id, page: 0 }; this.go('explorer'); },
     explanation(rule) { const e = ((this.caseData.reconciliation || {}).explanations || []).find(x => x.rule === rule); return e; },
     nearFact() { return (this.caseData.facts || []).find(f => f.kind === 'near_match'); },
     readsFact() { return (this.caseData.facts || []).find(f => (f.kind || '').startsWith('read_window') && f.fields.purpose === 'post-disconnect'); },
