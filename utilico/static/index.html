@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI-Utilico</title>
+<title>TG·AI·F</title>
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/app.js"></script>
 <script defer src="/static/vendor/alpine-3.17.5.min.js"></script>
@@ -13,7 +13,7 @@
 <!-- ================= sign-in ================= -->
 <template x-if="!me">
   <div class="signin">
-    <div class="brand"><div class="logo">AU</div><div><h1>AI-Utilico</h1><p>Billed-after-disconnection agent workflow · Utilico Energy (fictional data)</p></div></div>
+    <div class="brand"><div class="logo">TG</div><div><h1>TG·AI·F</h1><p>Billed-after-disconnection agent workflow · Utilico Energy (fictional data)</p></div></div>
     <h2 style="margin-top:26px">Sign in</h2>
     <p class="muted">Simulated sign-in, no passwords. Agents retrieve, reconcile and recommend; one accountable human - the DRI - makes the final decision on every case, and the process ends there. The server enforces every permission and segregation-of-duties rule.</p>
     <div class="users">
@@ -34,7 +34,7 @@
 <div>
 <header class="top">
   <div class="top-row">
-    <div class="brand"><div class="logo">AU</div><div><h1>AI-Utilico</h1><p>OMS × CC&amp;B × MDM × CRM × GL</p></div></div>
+    <div class="brand"><div class="logo">TG</div><div><h1>TG·AI·F</h1><p>OMS × CC&amp;B × MDM × CRM × GL</p></div></div>
     <span class="badge agent" x-text="agent ? agent.label : 'Agent: mock (scripted)'"></span>
     <span class="badge" :class="st && st.knowledge.mode==='chromadb' ? 'ok' : 'warn'" x-text="st && st.knowledge.mode==='chromadb' ? 'Knowledge: ChromaDB (local MiniLM)' : 'Knowledge store: fallback mode'"></span>
     <span class="badge" :class="sseOn ? 'ok' : 'warn'" x-text="sseOn ? 'live' : 'reconnecting…'"></span>
@@ -221,7 +221,7 @@
               <template x-if="caseData.type==='REGULATORY_RESPONSE'"><p>Linked to sealed case <a :href="'#/case/' + caseData.linked_case_id" class="mono" x-text="caseData.linked_case_id"></a> (<span x-text="money(caseData.amount)"></span>)</p></template></div></div>
           </div>
           <div>
-            <div class="card"><div class="card-head"><h3>Agent activity</h3><span class="muted" x-text="(caseData.activity||[]).length + ' tool call(s) · mock'"></span></div><div class="card-body">
+            <div class="card"><div class="card-head"><h3>Agent activity</h3><span class="muted" x-text="(caseData.activity||[]).length + ' tool call(s)'"></span></div><div class="card-body">
               <div class="lanes"><template x-for="l in LANES" :key="l"><div class="lane"><h4 x-text="l"></h4><template x-for="a in laneEntries(l)" :key="a.n"><div :class="{'res fail': !a.ok}"><span class="mono" x-text="a.tool"></span> <span class="faint" x-text="a.summary"></span></div></template></div></template></div>
               <div class="activity"><template x-for="a in otherActivity()" :key="a.n"><div class="a-row" :class="{bad: !a.ok}"><span class="faint" x-text="a.n"></span><span class="a-tool"><span x-text="a.tool"></span><div class="faint" x-text="a.agent.replace('agent.','')"></div></span><span><span x-text="a.summary"></span><div class="faint mono" x-text="a.args"></div></span></div></template></div></div></div>
             <div class="card"><div class="card-head"><h3>Evidence</h3><span class="muted" x-text="(caseData.facts||[]).length + ' fact(s) · click to open the source row'"></span></div>
